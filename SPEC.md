@@ -1,72 +1,83 @@
-# lively-bot — Spec
+# lively-bot - Spec
 
-> The Python WhatsApp companion — Mbak Asih and Mas Budi. This spec covers only the bot-specific implementation (Human Texting Engine, companion prompts, WhatsApp webhook, scheduling) — the shared data model and API live in [CORE.md](CORE.md).
+> The Python WhatsApp companion: Mbak Asih and Mas Budi. This spec covers bot-specific implementation: Human Texting Engine, companion prompts, Meta WhatsApp Cloud API webhook handling, text-only scheduling, consent handling, and event creation. The shared data model and API live in [CORE.md](CORE.md).
 
 ## 1. Hackathon context
+
 | Field | Value |
 |-------|-------|
 | Event | Garuda Hacks 7.0 (offline) |
-| Submit by | 2026-07-18 — exact time 🔴 TBD |
+| Submit by | 2026-07-18, exact time 🔴 TBD |
 | QUALIFICATION GATE | Working demo + repo + pitch deck submitted |
-| Judging | 🔴 TBD — criteria/weights not yet published |
+| Judging | 🔴 TBD, criteria/weights not yet published |
 
-**Chosen track:** Health — Lively targets the health-literacy and eldercare gap between urban and rural Indonesian families named in the theme brief, using a fall-risk assessment (30s Chair Stand), daily strength coaching, medicine adherence, and safety escalation as the clinical/care backbone. This repo is where all of that actually talks to the elder.
+**Chosen track:** Health. Lively targets the health-literacy and eldercare gap between urban and rural Indonesian families named in the theme brief, using WhatsApp-based daily strength coaching, routine medication reminders, and family follow-up signals.
 
-## 2. Problem & target user
-**User:** the elder themselves — someone who will never install an app, but already opens WhatsApp daily. **Problem:** existing eldercare tech assumes the elder adopts something new; this repo's entire job is to meet them exactly where they already are, in a way that doesn't feel like a bot (which elders notice and disengage from) and that catches real risk — a missed dose, a fall, a symptom mentioned in passing — before it becomes a crisis nobody in the family hears about until too late.
+## 2. Problem and target user
+
+**User:** the elder, who will not install a new app but already opens WhatsApp. **Problem:** eldercare tools often ask elders to adopt new software. This repo meets them in WhatsApp with warm text messages, while respecting explicit opt-in and sending only event-based signals to family through the backend.
 
 ## 3. Concept
-- Elder receives a warm, human-paced WhatsApp message from their assigned companion (Mbak Asih or Mas Budi) — typing indicator, short bubbles, natural delay, always using their honorific.
-- Daily loop: morning greeting → exercise prompt (5 min routine, video) → casual-reply completion logging.
-- Medicine loop: at each scheduled dose time, a reminder in the same voice; a casual confirmation reply logs it.
-- Assessment loop: guided 30s Chair Stand test in short texts, parses messy natural-language replies ("kayaknya 8 apa 9 ya"), returns an encouraging plain-language fall-risk reading.
-- Safety loop: any pain/dizziness mention, or the elder going quiet past a response window, triggers an alert to the family — silently, without alarming the elder mid-conversation.
-- Family loop: a "titipan" message from `lively-mobile` gets relayed in-character ("Eyang, ada titipan pesan dari Mbak Dina…").
-- Alternative considered: instant LLM replies with no pacing. Rejected — per the original design, bots that reply instantly with a wall of text are exactly what makes elders disengage; the pacing *is* the product's differentiator.
+
+- Family setup must not imply Lively can cold-message a number. WhatsApp/business messaging permission must exist first; then an approved template may request Lively product consent. The elder must explicitly give Lively product consent in WhatsApp before AI conversation, scheduled coaching/reminders, family chat visibility, or health-related event sharing starts.
+- Elder receives text messages from Mbak Asih or Mas Budi using honorific, short bubbles, and natural pacing.
+- Daily loop: greeting, exercise prompt, optional ordinary text link, and casual text completion logging.
+- Medication loop: scheduled text reminder, casual text confirmation, missed threshold event if repeated misses occur.
+- Chair Stand loop: 30-second progress check, parse text reply with repetitions, respond in plain language without diagnosis.
+- Alert loop: if a configured event occurs, bot posts an alert to backend. Backend stores it and sends push.
+- Alternative considered: instant LLM replies with no pacing. Rejected because the pacing is part of the product.
 
 ## 4. MVP features (YAGNI-tight)
-**In scope (the demoable spine):**
-- Human Texting Engine (typing indicator + message splitting + natural delay) — the foundation everything else runs on
-- Two companion personas (Mbak Asih, Mas Budi) with fixed, hand-crafted system prompts + per-elder memory
-- 30-second Chair Stand test flow, messy-reply parsing, plain-language result
-- Daily exercise check-in + casual-reply completion logging
-- Medicine reminder at scheduled times + casual-reply dose confirmation
-- Safety detection: pain/dizziness mention → immediate alert; no-response timeout → alert
-- Titipan relay (family message delivered in-character)
 
-**Explicitly NOT in MVP** → §6.
+**In scope:**
+- Text-only Meta WhatsApp Cloud API webhook flow.
+- Human Texting Engine for inbound-response flow, with best-effort typing indicator and fallback pacing.
+- Two companion personas with fixed prompts and per-elder context from backend.
+- Lively product consent opt-in, withdrawal, and pause handling through backend, distinct from platform messaging permission.
+- 30-second Chair Stand text flow and repetition logging.
+- Daily exercise check-in and text completion logging.
+- Medication reminder at scheduled times and text confirmation/missed logging.
+- Event creation for `missed_days`, `pain_mention`, `dizziness_mention`, `medication_missed`, `no_response`, and explicit `distress_message`.
+- Titipan relay if time allows.
+
+**Explicitly NOT in MVP** goes in §6.
 
 ## 5. Architecture
-Python service. Webhook receiver for Meta WhatsApp Cloud API inbound messages; scheduler for outbound check-ins/reminders; OpenAI for the companion LLM layer.
+
+Python service. Meta WhatsApp Cloud API webhooks handle inbound/outbound text; webhook framework is FastAPI or Flask, still TBD; scheduler is also TBD; OpenAI provides the companion LLM layer; backend API owns state.
 
 ```
-Elder's WhatsApp ⇄ Meta WhatsApp Cloud API ⇄ lively-bot (Python)
-                                                   │
-                                    ┌──────────────┼──────────────┐
-                                    ▼              ▼              ▼
-                              Human Texting   OpenAI (LLM)   lively-backend
-                              Engine (split/                 (BOT_SERVICE_KEY)
-                              delay/typing)
+Elder WhatsApp <-> Meta WhatsApp Cloud API <-> lively-bot (Python)
+                                                       |
+                                 +---------------------+---------------------+
+                                 v                     v                     v
+                         Human Texting Engine     OpenAI (LLM)      lively-backend
+                         text split/pacing                         BOT_SERVICE_KEY
 ```
 
-Scheduler (🟡 pick Day 1 — APScheduler or a simple cron-style loop) drives: morning check-in (randomized 06:30–07:00 window), medicine reminders (per `medications.schedule_times`), and the `no_response` timeout check.
+Scheduler: TBD, driving morning check-ins, medication reminders, and no-response checks from backend schedule/context reads. Business-initiated messages, including first contact and reminders outside WhatsApp's 24-hour customer service window, require valid platform messaging permission and approved templates.
 
 ## 6. Non-goals
-- No voice-note replies at MVP — incoming voice notes get transcribed (speech-to-text) so the companion replies in text, per the original design; the companion itself never sends voice. Full voice interaction is roadmap.
-- No physiotherapist escalation, no camera-based movement checking — roadmap, per the original design's deliberate cuts.
-- No additional companion personas or regional dialects beyond Mbak Asih / Mas Budi.
-- No multi-caregiver alert routing logic in this repo — alerts are raised via `POST /alerts`; fan-out to multiple family members is `lively-backend`'s concern (see that repo's SPEC).
 
-## 7. Risks & unknowns
-- 🔴 Typing-indicator rendering on Meta WhatsApp Cloud API is unverified — this is the demo's central "magic moment." Test on a real phone Day 1 morning, before building anything else. Fallback: simulate rhythm through timed message-splitting alone if indicators don't render as expected.
-- 🔴 WhatsApp Business/Cloud API setup friction (app review, test number provisioning) — start Day 1, not Day 2; this has the most external-dependency risk of any repo in the project.
-- 🟡 Safety detection (pain/dizziness) relies on LLM judgment over free-form Indonesian text — false negatives are the failure mode that matters most here. Mitigate with both keyword triggers and LLM-assisted detection, not LLM alone.
-- 🟡 Scheduler choice and reliability under a hackathon demo environment — keep it simple, test the exact demo-time trigger path Day 3.
-- 🟢 OpenAI API integration itself is low-risk, well-documented.
+- No native video, photo, image, or media workflow. Ordinary text links are allowed.
+- No photo or voice method for exercise or medication confirmation.
+- No voice note ingestion, transcription, or voice interaction in MVP or stretch. Voice is roadmap-only.
+- No movement checking, clinical assessment, diagnosis, or standalone health-status determination.
+- No crisis interception or background monitoring. Alerts are event-based signals for family follow-up.
+- No account/session model in this repo. Bot uses `BOT_SERVICE_KEY`; backend owns household accounts, devices, platform permission, and product consent records.
 
-## 8. Submission checklist (mapped to THIS event's deliverables)
-- [ ] Working demo (bot reachable, at least one real WhatsApp conversation demoable live)
-- [ ] Public repo with README, LICENSE, `.gitignore`, no committed secrets
-- [ ] Pitch deck (🔴 TBD which repo hosts it)
+## 7. Risks and unknowns
 
-**Doc sources:** none fetched — all facts above came directly from the user during drafting (2026-07-16).
+- 🔴 Official typing indicator behavior is unverified end-to-end on a live phone with the chosen Meta-compatible implementation. Test on a real phone Day 1 morning. Fall back to split-message pacing if unavailable.
+- 🔴 Meta Cloud API setup friction is real: app setup, webhook verification, phone-number configuration, and approved templates for business-initiated sends can slow first contact and reminder flows.
+- 🟡 Event detection for pain/dizziness over free-form Indonesian text can misread intent. Treat outputs as follow-up signals, not verified incidents.
+- 🟡 Scheduler choice and reliability remain TBD under a hackathon demo environment. Keep it simple and test the exact demo-time path Day 3.
+- 🟢 OpenAI API integration itself is low-risk.
+
+## 8. Submission checklist
+
+- [ ] Working demo, bot reachable with at least one real WhatsApp text conversation through Meta WhatsApp Cloud API.
+- [ ] Public repo with README, LICENSE, `.gitignore`, no committed secrets.
+- [ ] Pitch deck, owner 🔴 TBD.
+
+**Doc sources:** none fetched. Facts came from user-approved product decisions and drafting context on 2026-07-16.

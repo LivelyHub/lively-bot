@@ -1,41 +1,49 @@
-# lively-bot — Plan
+# lively-bot - Plan
 
-**Window:** 2026-07-16 → 2026-07-18 (Garuda Hacks 7.0, offline). ~3 days. Solo/small-team repo owner. This is the highest-risk repo (external WhatsApp API, real-time behavior) — build order front-loads the riskiest unknowns per the original build order.
+**Window:** 2026-07-16 to 2026-07-18 (Garuda Hacks 7.0, offline). About 3 days. Solo/small-team repo owner. This is the highest-risk repo because WhatsApp connection behavior and real-time text pacing must work live.
 
 ## Setup (Day 0 / early Day 1)
-- Env: `WHATSAPP_CLOUD_API_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VERIFY_TOKEN`, `OPENAI_API_KEY`, `OPENAI_MODEL`, `BACKEND_API_URL`, `BOT_SERVICE_KEY`. Ship `.env.example` only.
-- Accounts: Meta developer app + WhatsApp Cloud API test number, OpenAI API key.
-- Tooling: Python, a webhook framework (e.g. FastAPI/Flask — 🟡 pick Day 1), a scheduler for reminders (e.g. APScheduler or a cron-style loop — 🟡 pick Day 1).
-- Repo: public; README skeleton + license + `.gitignore` (this pass).
 
-## Definition of Done (the bar)
-1. WhatsApp Cloud API echo bot working, typing indicator verified rendering on a real phone (not just API docs) — the single most important early validation.
-2. Human Texting Engine middleware live: every outbound message goes through typing-indicator → delay → send, never under ~2s.
-3. Both companion personas (Mbak Asih, Mas Budi) hold a coherent conversation, remember elder context (grandchild names, prior complaints), and can be swapped mid-conversation.
-4. 30-second chair-test flow: guides it step by step, parses a messy natural-language reply, logs via `POST /assessments/chair-test`.
-5. Daily exercise check-in + medicine reminder both fire at scheduled times and log completions/doses via the backend.
-6. Safety detection: pain/dizziness mention → immediate `pain_mention`/`dizziness_mention` alert; no elder reply within window → `no_response` alert.
-> Item 1 is the highest-risk, do-first item — if typing indicators don't render, the entire "human texting" pitch collapses. Verify before building anything else.
+- Env: `WHATSAPP_CLOUD_API_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VERIFY_TOKEN`, `OPENAI_API_KEY`, `OPENAI_MODEL`, `BACKEND_API_URL`, `BOT_SERVICE_KEY`. Ship `.env.example` only.
+- Accounts: Meta developer app, configured WhatsApp Cloud API webhook, dedicated Meta WhatsApp test number or configured phone number, OpenAI API key.
+- Tooling: Python, FastAPI or Flask still TBD for the webhook, APScheduler or a simple loop still TBD for Lively-owned scheduling, OpenAI for companion replies.
+- Repo: public; README skeleton + license + `.gitignore` already planned.
+
+## Definition of Done
+
+1. Meta WhatsApp Cloud API echo bot receives and sends real text messages on a phone.
+2. Human Texting Engine works for inbound-response flow: split text, pace conservatively, use typing indicator best-effort, and fall back cleanly if unavailable.
+3. Both companions hold a text conversation and use backend consent-gated context.
+4. Backend-driven consent gate keeps platform messaging permission separate from Lively product consent. First contact and reminders outside WhatsApp's 24-hour customer service window use approved templates only when platform permission exists, and product consent still gates when the bot may start AI conversation, scheduled coaching/reminders, family chat visibility, or health-related event sharing.
+5. 30-second Chair Stand flow guides the elder, parses a messy text reply, and logs repetitions through backend.
+6. Daily exercise check-in and medication reminders fire from Lively-owned scheduler and log text confirmations.
+7. Event-based alert creation works for pain mention, dizziness mention, missed days, medication missed, no response, and explicit distress text.
 
 ## Day-by-day
-**Day 1 — 2026-07-16 — WhatsApp connectivity + Human Texting Engine (highest-risk first)**
-- WhatsApp Cloud API echo bot: receive a message, send one back. Verify typing indicator renders on a real phone. 🔴 If it doesn't render as expected, this is the moment to fall back to timed message-splitting alone — decide immediately, don't lose a day discovering this on Day 2.
-- Build the Human Texting Engine middleware (split → typing indicator → delay → send), ~100 lines, reusable for every message type below.
-- Draft both companion system prompts (personality + texting-style rules + safety base layer), parameterized by honorific + health flags.
 
-**Day 2 — 2026-07-17 — conversation logic + backend integration**
-- Wire conversation state + memory (grandchild names, complaints) persisted via `lively-backend` (`POST /bot/inbound`, `POST /bot/outbound`).
-- Build the 30s chair-test flow (guided steps + messy-reply parsing).
-- Build daily exercise check-in scheduler + medicine reminder scheduler (per CORE.md §5) — both use the same Human Texting Engine.
-- Build safety detection (pain/dizziness keyword + LLM-assisted detection → `POST /alerts`) and the no-response timeout check.
-- Voice note transcription (speech-to-text) — 🟡 stretch, cut first if time compresses.
+**Day 1 - 2026-07-16 - WhatsApp connectivity + Human Texting Engine**
 
-**Day 3 — 2026-07-18 — polish, demo rehearsal, submit**
-- Seed demo elder "Eyang Uti" conversation history for a believable Chat Monitor.
-- Rehearse the live demo (typing-indicator magic moment, messy chair-test reply, missed-day/medicine-missed alert) 3× with a timer.
+- Cloud API echo bot: configure Meta developer app webhook verification, receive a text message, send one back through the test number, test on a real phone.
+- Validate official Meta-compatible typing indicator behavior in inbound-response flow. 🔴 If it does not render, fall back to timed message splitting and conservative pacing immediately.
+- Build Human Texting Engine middleware: split, sequence conservatively, wait for delivery where practical, pace, send. Do not assume split-message request order is guaranteed.
+- Draft both companion prompts, parameterized by honorific, health flags, timezone, platform permission state, and product consent status.
+
+**Day 2 - 2026-07-17 - platform permission, product consent, conversation, scheduler**
+
+- Wire backend auth with `BOT_SERVICE_KEY` and implement product consent writes through `POST /bot/consent`; do not send product-consent templates unless platform messaging permission exists.
+- Wire conversation state and logging through `POST /bot/inbound`, `POST /bot/outbound`, and `GET /elders/:id`.
+- Build 30-second Chair Stand text flow and log via `POST /assessments/chair-test`.
+- Build Lively-owned scheduler reading `GET /bot/schedule` for coaching, medication reminders, and no-response checks.
+- Build event creation via `POST /alerts`. Keep alerts as follow-up signals, not verified incidents.
+
+**Day 3 - 2026-07-18 - polish, demo rehearsal, submit**
+
+- Seed a believable text conversation for demo elder "Eyang Uti" through backend.
+- Rehearse live demo 3 times: opt-in, typing/pacing, Chair Stand reply, medication confirmation, alert signal.
 - Submit with margin before deadline.
 
 ## Honest feasibility verdict
-This is the repo most likely to slip — WhatsApp Cloud API setup (business verification, test numbers, webhook config) has more external friction than any other repo's stack, and the typing-indicator behavior is unverified until tested live. Mitigation: verify typing indicators in the first hour of Day 1, not Day 3, per the original build order's explicit warning.
 
-Cut-order if time compresses: drop voice-note transcription first, then medicine reminders (fall back to exercise-only check-ins), then the `no_response` timeout alert (keep `pain_mention`/`dizziness_mention` — those are cheaper, keyword-triggered, and safety-critical). The irreducible core is the Human Texting Engine + one working companion persona + the chair-test flow — that's the demo's spine.
+This repo is most likely to slip because Meta Cloud API setup friction is real: developer app setup, webhook verification, test-number configuration, and approved templates for business-initiated sends can slow first contact and reminder flows. Typing-indicator behavior is also unverified until tested live. Mitigation: prove real text send/receive and typing-indicator fallback in the first hour of Day 1.
+
+Cut-order if time compresses: drop titipan first, then medication reminders, then no-response alert. Keep text conversation, platform permission/product consent gates, one companion persona, Chair Stand flow, and pain/dizziness event creation because those carry the demo spine. Voice note transcription is not in MVP or stretch.
