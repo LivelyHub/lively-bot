@@ -1,0 +1,28 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# Python
+__pycache__/
+.venv/
+venv/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+
+# OS / editor
+.DS_Store
+*.log
+.idea/
+.vscode/
+
+# Local planning artifacts (specs/plans) — kept private during the competition
+docs/superpowers/
+.superpowers/
+
+# Local session handoff (not published)
+HANDOFF.md
