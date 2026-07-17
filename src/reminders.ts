@@ -1,5 +1,6 @@
 import { chat } from "./llmClient.js";
 import { buildSystemPrompt } from "./soul/prompt.js";
+import { loadPersonalize } from "./memory/personalize.js";
 import { createMemoryStore, type Medication } from "./memory/store.js";
 import { backendRequest } from "./tools/backend.js";
 import { env } from "./config.js";
@@ -60,7 +61,7 @@ async function sendReminder(elderId: string, med: Medication, time: string): Pro
   const soul = memory.getSoul(elderId);
   const { summary } = memory.getRemembrance(elderId);
 
-  let system = buildSystemPrompt(soul);
+  let system = buildSystemPrompt(soul, loadPersonalize(elderId));
   if (summary) system += `\n\nWhat you remember about this elder from earlier conversations:\n${summary}`;
 
   const dose = med.dose ? ` (${med.dose})` : "";
