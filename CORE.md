@@ -58,6 +58,7 @@ titipan_messages   (id, elder_id, household_account_id, body, status['queued'|'d
 | `GET /elders/:id/conversation` | mobile | read chat monitor only after elder opt-in |
 | `POST /bot/inbound` | bot | log inbound WhatsApp text and fetch context if consent allows (backend passes this as `context` in its call to `lively-bot`'s `POST /reply`) |
 | `POST /bot/outbound` | bot | log outbound WhatsApp text after send |
+| `POST /bot/send` | bot | proactive bot-initiated send — `{elderId, text, kind}`; backend delivers over WhatsApp Cloud API and logs the outbound row (amendment: lively-bot generates reminders, backend owns delivery) |
 | `GET /elders/:id/progress` | mobile | read exercise history and Chair Stand history |
 | `POST /assessments/chair-test` | bot | record parsed 30-second Chair Stand repetitions |
 | `POST /exercise-logs` | bot | record text-confirmed daily exercise completion |
