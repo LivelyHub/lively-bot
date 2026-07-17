@@ -1,5 +1,5 @@
 import { chat } from "./llmClient.js";
-import { buildSystemPrompt, DEFAULT_ELDER_CONTEXT, type ElderContext } from "./soul/prompt.js";
+import { buildSystemPrompt } from "./soul/prompt.js";
 import { toOpenAITools, runTool } from "./tools/index.js";
 import { createMemoryStore, type ChatMessage } from "./memory/store.js";
 import { archivableTurns, consolidate } from "./memory/remember.js";
@@ -10,13 +10,14 @@ const MAX_TOOL_ROUNDS = 3;
 
 const memory = createMemoryStore();
 
-export async function reply(id: string, text: string, context: ElderContext = DEFAULT_ELDER_CONTEXT): Promise<string> {
+export async function reply(id: string, text: string): Promise<string> {
   // The system prompt is rebuilt every turn (not stored) so it always carries the
-  // current persona context and the latest long-term notes about this elder.
+  // elder's registered soul and the latest long-term notes about them.
+  const soul = memory.getSoul(id);
   const { summary } = memory.getRemembrance(id);
   const system = summary
-    ? `${buildSystemPrompt(context)}\n\nWhat you remember about this elder from earlier conversations:\n${summary}`
-    : buildSystemPrompt(context);
+    ? `${buildSystemPrompt(soul)}\n\nWhat you remember about this elder from earlier conversations:\n${summary}`
+    : buildSystemPrompt(soul);
 
   const history: ChatMessage[] = [
     { role: "system", content: system },

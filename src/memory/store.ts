@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { env } from "../config.js";
 import { logger } from "../logger.js";
+import type { Soul } from "../soul/prompt.js";
 
 export type ChatMessage = ChatCompletionMessageParam;
 
@@ -26,6 +27,10 @@ export interface MemoryStore {
 
   getRemembrance(id: string): Remembrance;
   setRemembrance(id: string, summary: string, lastArchiveId: number): void;
+
+  /** Per-elder companion profile, registered once by the backend at onboarding. */
+  getSoul(id: string): Soul | null;
+  setSoul(id: string, soul: Soul): void;
 }
 
 class SqliteMemoryStore implements MemoryStore {
@@ -58,6 +63,12 @@ class SqliteMemoryStore implements MemoryStore {
         last_archive_id INTEGER NOT NULL DEFAULT 0,
         updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
       );
+
+      CREATE TABLE IF NOT EXISTS souls (
+        elder_id TEXT PRIMARY KEY,
+        soul TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
     `);
 
     this.stmts = {
@@ -78,6 +89,12 @@ class SqliteMemoryStore implements MemoryStore {
       getRemembrance: this.db.prepare(
         "SELECT summary, last_archive_id AS lastArchiveId FROM remembrances WHERE elder_id = ?"
       ),
+      getSoul: this.db.prepare("SELECT soul FROM souls WHERE elder_id = ?"),
+      setSoul: this.db.prepare(`
+        INSERT INTO souls (elder_id, soul, updated_at)
+        VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        ON CONFLICT (elder_id) DO UPDATE SET soul = excluded.soul, updated_at = excluded.updated_at
+      `),
       setRemembrance: this.db.prepare(`
         INSERT INTO remembrances (elder_id, summary, last_archive_id, updated_at)
         VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
@@ -128,6 +145,21 @@ class SqliteMemoryStore implements MemoryStore {
 
   setRemembrance(id: string, summary: string, lastArchiveId: number): void {
     this.stmts.setRemembrance.run(id, summary, lastArchiveId);
+  }
+
+  getSoul(id: string): Soul | null {
+    const row = this.stmts.getSoul.get(id) as { soul: string } | undefined;
+    if (!row) return null;
+    try {
+      return JSON.parse(row.soul) as Soul;
+    } catch (err) {
+      logger.error({ err, id }, "Corrupt soul row, treating elder as unregistered");
+      return null;
+    }
+  }
+
+  setSoul(id: string, soul: Soul): void {
+    this.stmts.setSoul.run(id, JSON.stringify(soul));
   }
 }
 

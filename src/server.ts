@@ -1,14 +1,21 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { reply } from "./companion.js";
+import { createMemoryStore } from "./memory/store.js";
+import type { Soul } from "./soul/prompt.js";
 import { env } from "./config.js";
 import { logger } from "./logger.js";
-import type { ElderContext } from "./soul/prompt.js";
 
 interface ReplyRequest {
   elderId: string;
   text: string;
-  context?: ElderContext;
 }
+
+interface SoulRequest {
+  elderId: string;
+  soul: Soul;
+}
+
+const memory = createMemoryStore();
 
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -26,7 +33,7 @@ function send(res: ServerResponse, status: number, body: unknown) {
 
 export function createBotServer() {
   return createServer(async (req, res) => {
-    if (req.method !== "POST" || req.url !== "/reply") {
+    if (req.method !== "POST" || (req.url !== "/reply" && req.url !== "/soul")) {
       send(res, 404, { error: "not found" });
       return;
     }
@@ -36,7 +43,7 @@ export function createBotServer() {
       return;
     }
 
-    let payload: ReplyRequest;
+    let payload: any;
     try {
       payload = JSON.parse(await readBody(req));
     } catch {
@@ -44,16 +51,31 @@ export function createBotServer() {
       return;
     }
 
-    if (!payload.elderId || !payload.text) {
+    // One-time registration: backend sends the elder's companion profile once
+    // at onboarding; it persists in SQLite and shapes every future reply.
+    if (req.url === "/soul") {
+      const { elderId, soul } = payload as SoulRequest;
+      if (!elderId || typeof soul !== "object" || soul === null || Array.isArray(soul)) {
+        send(res, 400, { error: "elderId and soul object are required" });
+        return;
+      }
+      memory.setSoul(elderId, soul);
+      logger.info({ elderId }, "Soul registered for elder");
+      send(res, 200, { ok: true });
+      return;
+    }
+
+    const { elderId, text } = payload as ReplyRequest;
+    if (!elderId || !text) {
       send(res, 400, { error: "elderId and text are required" });
       return;
     }
 
     try {
-      const answer = await reply(payload.elderId, payload.text, payload.context);
+      const answer = await reply(elderId, text);
       send(res, 200, { reply: answer });
     } catch (err) {
-      logger.error({ err, elderId: payload.elderId }, "Failed to generate reply");
+      logger.error({ err, elderId }, "Failed to generate reply");
       send(res, 500, { error: "internal error" });
     }
   });
