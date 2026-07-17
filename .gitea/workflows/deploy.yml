@@ -1,0 +1,50 @@
+name: Build & Deploy lively-bot
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Type errors fail the image build (tsc runs inside `docker build`),
+      # so this is the CI gate as well as the artifact.
+      - name: Build image
+        run: docker build -t lively-bot:${{ gitea.sha }} -t lively-bot:latest .
+
+      # The whole runtime env lives in one Gitea secret (BOT_ENV_FILE) whose
+      # value is a complete .env file: OPENAI_API_KEY, OPENROUTER_API_KEY,
+      # BACKEND_API_URL, BOT_SERVICE_KEY, model overrides, etc.
+      # PORT and DATABASE_PATH are baked into the image and need no entry.
+      - name: Write runtime env file
+        run: |
+          umask 077
+          printf '%s\n' "${{ secrets.BOT_ENV_FILE }}" > .env.deploy
+
+      - name: Replace container
+        run: |
+          docker rm -f lively-bot 2>/dev/null || true
+          docker run -d \
+            --name lively-bot \
+            --restart unless-stopped \
+            -p 7002:3000 \
+            --env-file .env.deploy \
+            -v lively-bot-data:/app/data \
+            lively-bot:${{ gitea.sha }}
+          rm -f .env.deploy
+
+      - name: Verify container is serving
+        run: |
+          sleep 3
+          docker ps --filter name=lively-bot --filter status=running --format '{{.Names}}' | grep -q '^lively-bot$'
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:7002/reply -H 'Content-Type: application/json' -d '{}')
+          echo "service responded with HTTP $code"
+          test "$code" = "400" -o "$code" = "401"
+
+      - name: Prune old images
+        if: success()
+        run: docker image prune -f
