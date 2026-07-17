@@ -26,11 +26,15 @@ jobs:
           printf '%s\n' "${{ secrets.BOT_ENV_FILE }}" | tr -d '\r' > .env.deploy
 
       - name: Replace container
+        # Shared user-defined network so lively-backend can reach this
+        # container as http://lively-bot:7002 (default bridge has no DNS).
         run: |
+          docker network create lively 2>/dev/null || true
           docker rm -f lively-bot 2>/dev/null || true
           docker run -d \
             --name lively-bot \
             --restart unless-stopped \
+            --network lively \
             -p 7002:7002 \
             --env-file .env.deploy \
             -v lively-bot-data:/app/data \
