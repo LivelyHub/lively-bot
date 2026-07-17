@@ -1,142 +1,214 @@
-# CORE - Lively Shared Data & API Layer
+# CORE — Lively Shared Data & API Layer
 
-> This doc is duplicated verbatim across all four Lively repos: `lively-landing`, `lively-mobile`, `lively-backend`, `lively-bot`. `lively-backend` is the canonical source of truth because it owns the schema, auth contract, API, alert persistence, and push dispatch. If this changes, update all four copies.
+> This doc is duplicated verbatim across all four Lively repos: `lively-landing`, `lively-mobile`, `lively-backend`, `lively-bot`. `lively-backend` is the source of truth (it owns the schema and API). If this changes, update all four copies.
 
-Lively has one shared foundation underneath four surfaces: a marketing site, a family-facing mobile app, a REST/data backend, and a WhatsApp companion bot. All four agree on one account model, one elder profile, one platform messaging gate, one product consent gate, one event-based alert path, and one API contract served by `lively-backend`. The landing page is mostly static and does not call the API at MVP.
+Lively has one shared foundation underneath four different surfaces: a marketing site, a family-facing mobile app, a REST/data backend, and a WhatsApp companion bot. All four agree on the same data model (elders, companions, conversations, assessments, alerts) and the same API contract served by `lively-backend`. The landing page is the lightest consumer (mostly static, no auth) — it's included here for consistency, not because it calls the API directly today.
 
-## What the core provides
+## What the core provides (and what it does NOT)
 
 **Provides:**
-- Postgres (Neon) schema for household accounts, one-to-one elder profiles, device registrations, platform messaging permission, product consent, companions, conversations, Chair Stand results, exercise logs, medications, medication logs, alerts, and titipan messages.
-- REST API (Fastify, `lively-backend`) that `lively-mobile` and `lively-bot` both call. Neither repo talks to the DB directly.
-- Account model: one shared household account per elder. Multiple family members may use the same login on multiple devices. This is not separate family identities, invitations, profiles, or fan-out by separate family account.
-- Device registration model: active push tokens live in `device_registrations`. Backend dispatches each persisted alert to all active device tokens for the shared household account. Logout or revocation deactivates that device token without deleting the account.
-- Auth model: mobile uses household-account sessions/JWT from the backend. Multiple device sessions may coexist. Bot uses `BOT_SERVICE_KEY` as a trusted service, never as a user session.
-- Consent model: platform messaging permission and Lively product consent are separate prerequisites. A family can request product consent only after valid WhatsApp/business messaging permission exists. The elder must explicitly give Lively product consent in WhatsApp before AI conversation, scheduled coaching/reminders, family chat visibility, or health-related event sharing starts.
-- Companion persona contract: two fixed personas, Mbak Asih and Mas Budi, parameterized by honorific and health flags.
-- Human Texting Engine contract: text-only WhatsApp message splitting, pacing, and best-effort typing indicator behavior.
-- Medication reminder contract: routine reminder and confirmation logging only.
-- Event-based alert contract: backend persists alerts and owns push dispatch; mobile registers devices, receives/displays push, and shows the Alerts UI.
+- Postgres (Neon) schema: elders, family members, companion configs, conversation messages, chair-test results, exercise completions, medications, medication logs, alerts.
+- REST API (Fastify, `lively-backend`) that `lively-mobile` and `lively-bot` both read/write through — neither repo talks to the DB directly.
+- Auth model: family members authenticate via the backend (JWT with a `jti` claim, revocable via `POST /auth/logout` + the `revoked_tokens` table); `lively-bot` authenticates as a trusted service (API key), not a user.
+- Companion persona contract: two fixed personas (Mbak Asih, Mas Budi) at the product/mobile level, executed bot-side as a per-elder freeform "Soul" the backend registers — see §3.
+- Human Texting Engine contract: the message-splitting/typing-delay behavior the product wants — 🟡 documented target, not yet implemented anywhere; see §4 for actual current behavior.
+- Medicine reminder contract: recurring per-elder medication schedule the companion nags about daily, same channel as exercise check-ins.
+- Safety escalation contract: any pain/dizziness mention, or no reply from the elder within a defined window, raises an alert that pushes straight to the family member — the "something happened to Eyang" case.
+- Gamification & family-reporting contract: progress bar, engagement streak, chart-ready history, and a weekly/monthly performance report — turns raw logs into something a grandchild wants to check, not a chore. See §7.
 
-**Does NOT provide:** UI/UX, actual LLM prompt text, WhatsApp webhook handling, page design, native media workflows, clinical guidance, legal compliance claims, or continuous monitoring. A repo implements these interfaces; it does not fork them. Needing a new field or endpoint means changing this doc in all four repos.
+**Does NOT provide** (lives in each repo): UI/UX, the actual LLM prompt text, push notification delivery, page design. A repo implements these interfaces; it does not fork them. Needing a new field or endpoint = a change to this doc (and all four copies), not a local workaround.
 
 ## Details
 
-### 1. Data model - Postgres on Neon
+### 1. Data model — Postgres on Neon
 
 ```
-household_accounts (id, email, password_hash, created_at)
-elders             (id, household_account_id UNIQUE, name, honorific, companion_id, health_flags[], phone_e164, timezone, paused_at, created_at)
-device_registrations(id, household_account_id, platform, push_token, active, revoked_at, created_at, last_seen_at)
-whatsapp_permissions(id, elder_id, status['unknown'|'permitted'|'revoked'], source, attested_at, updated_at)
-elder_consents     (id, elder_id, status['pending'|'opted_in'|'withdrawn'|'paused'], source['whatsapp'], consented_at, withdrawn_at, updated_at)
-companions         (id, key['mbak_asih'|'mas_budi'], display_name, system_prompt_ref)
-conversations      (id, elder_id, direction['in'|'out'], body, created_at)
-chair_test_results (id, elder_id, reps, recorded_at, source['chat'])
-exercise_logs      (id, elder_id, completed_at, method['text'])
-medications        (id, elder_id, name, dosage_label, schedule_times[], timezone, missed_threshold, active, deactivated_at, created_at, updated_at)
-medication_logs    (id, medication_id, elder_id, status['confirmed'|'missed'], logged_at, method['text'])
-alerts             (id, elder_id, type['missed_days'|'pain_mention'|'dizziness_mention'|'medication_missed'|'no_response'|'distress_message'], payload, created_at, resolved_at)
-titipan_messages   (id, elder_id, household_account_id, body, status['queued'|'delivered'|'failed'], delivered_at, created_at)
+elders            (id, family_member_id, name, honorific, companion_id, health_flags[], personalize[jsonb, nullable], phone_e164[unique], paused, created_at)
+family_members    (id, email, name, password_hash, push_token, created_at)
+companions        (id, key['mbak_asih'|'mas_budi'][unique], display_name, system_prompt_ref)
+conversations     (id, elder_id, direction['in'|'out'], body, created_at)
+chair_test_results(id, elder_id, reps, recorded_at, source['chat'])
+exercise_logs     (id, elder_id, completed_at, method['reply'|'emoji'|'photo'], photo_url[nullable])
+medications       (id, elder_id, name, dosage, schedule_times[], active, created_at)
+medication_logs   (id, medication_id, elder_id, taken_at, method['reply'|'emoji'|'photo'], photo_url[nullable])
+alerts            (id, elder_id, type['missed_days'|'pain_mention'|'dizziness_mention'|'medication_missed'|'no_response'|'emergency'], payload, created_at, resolved_at)
+titipan_messages  (id, elder_id, family_member_id, body, delivered_at, created_at)
+bot_contacts      (id, phone_e164[unique], elder_id[nullable], first_seen_at, last_seen_at, message_count)
+revoked_tokens    (jti, expires_at, revoked_at)
 ```
+
+`photo_url` on `exercise_logs`/`medication_logs` is set when `method='photo'` — it points at a file previously stored via `POST /uploads/photo` and served statically under `/uploads/`. `revoked_tokens` is one row per logged-out JWT (keyed by its `jti` claim) — the only way a 7-day JWT is actually revocable without a session store; `elders` has no timezone column — single-market default `Asia/Jakarta` is hardcoded where needed.
 
 ### 2. API contract (Fastify, `lively-backend`)
 
+Reconciled against the actual implementation during first local mobile↔backend connection testing (2026-07-16/17) and re-verified against the code on 2026-07-17; this is the real contract.
+
+**Response casing:** snake_case everywhere. (Earlier revisions of this backend used camelCase for elders/medications/family-members/auth responses — an unforced inconsistency, since only progress/report ever had a documented shape. Standardized to snake_case, matching mobile's own assumption and this doc's established convention in §7.)
+
 | Endpoint | Consumer | Purpose |
 |---|---|---|
-| `POST /auth/register` | mobile | create the shared household account for one elder |
-| `POST /auth/login` | mobile | create a household-account session/JWT |
-| `POST /auth/logout` | mobile | revoke the current device registration/session |
-| `POST /devices` | mobile | register or refresh this device's active push token |
-| `DELETE /devices/:id` | mobile | deactivate a push token on logout or revocation |
-| `POST /elders` | mobile | create the one-to-one elder profile for the household account, companion, honorific, timezone, health flags |
-| `GET /elders/:id` | mobile, bot | read elder setup and consent-gated companion context |
-| `PATCH /elders/:id` | mobile | switch companion, honorific, health flags, timezone, or pause state |
-| `PATCH /elders/:id/whatsapp-permission` | mobile | record, update, or revoke the household attestation that valid WhatsApp/business messaging permission exists, with status, source, and timestamp |
-| `POST /elders/:id/consent/request` | mobile | request Lively product consent after platform messaging permission exists |
-| `POST /bot/consent` | bot | record elder opt-in, withdrawal, or pause from WhatsApp |
-| `GET /elders/:id/conversation` | mobile | read chat monitor only after elder opt-in |
-| `POST /bot/inbound` | bot | log inbound WhatsApp text and fetch context if consent allows (backend passes this as `context` in its call to `lively-bot`'s `POST /reply`) |
-| `POST /bot/outbound` | bot | log outbound WhatsApp text after send |
+| `GET /health` | ops | liveness + DB connectivity check, no auth |
+| `POST /auth/register` | mobile | create a family member account → `{token, family_member}` |
+| `POST /auth/login` | mobile | → `{token, family_member}` |
+| `POST /auth/logout` | mobile | revoke the current JWT (inserts its `jti` into `revoked_tokens`) |
+| `GET /family-members/me` | mobile | read own profile |
+| `PATCH /family-members/me` | mobile | update `push_token` and/or `name` |
+| `GET /elders` | mobile | list the family member's own elders |
+| `GET /elders/:id` | mobile | single elder |
+| `POST /elders` | mobile | create elder + pick companion + honorific + health flags + optional personalize; also pushes the elder's Soul to `lively-bot` (§3) |
+| `PATCH /elders/:id` | mobile | switch companion / honorific / health flags / personalize / pause; re-pushes the Soul on change |
+| `GET /elders/:id/conversation` | mobile | chat monitor read, `before`/`after` cursor pagination |
+| `GET /webhook` | meta | WhatsApp Cloud API webhook verification handshake — echoes `hub.challenge` when `hub.verify_token` matches `WHATSAPP_VERIFY_TOKEN` (amendment: hosted here because the backend is the publicly deployed service) |
+| `POST /webhook` | meta | WhatsApp Cloud API message delivery — `X-Hub-Signature-256` verified against `META_APP_SECRET`; inbound texts stored via the same path as `/bot/inbound` (bot_contacts upsert + conversation log). For registered, unpaused elders the backend then orchestrates the reply: it calls `lively-bot`'s `POST /reply` (§2b), sends the answer over WhatsApp, and logs the outbound row — fire-and-forget so Meta gets its 200 fast. A "Notify Caregiver" button tap raises an `emergency` alert (§6) and re-sends a fresh button card |
+| `POST /bot/inbound` | bot | log inbound WhatsApp message, fetch companion context; upserts `bot_contacts` for every sender (unknown numbers are recorded, then 404) |
+| `POST /bot/outbound` | bot | log outbound message after send |
 | `POST /bot/send` | bot | proactive bot-initiated send — `{elderId, text, kind}`; backend delivers over WhatsApp Cloud API and logs the outbound row (amendment: lively-bot generates reminders, backend owns delivery) |
-| `GET /elders/:id/progress` | mobile | read exercise history and Chair Stand history |
-| `POST /assessments/chair-test` | bot | record parsed 30-second Chair Stand repetitions |
-| `POST /exercise-logs` | bot | record text-confirmed daily exercise completion |
-| `GET /elders/:id/medications` | mobile, bot | read active medication schedules and recent logs |
-| `POST /medications` | mobile | add routine medication name, dosage label, schedule, timezone, threshold |
-| `PATCH /medications/:id` | mobile | update schedule fields or deactivate a medication |
-| `POST /medication-logs` | bot | record text-confirmed or missed scheduled dose status |
-| `GET /elders/:id/alerts` | mobile | read alerts for the Alerts UI |
-| `POST /alerts` | bot | create an event-based alert; backend stores and dispatches push |
-| `PATCH /alerts/:id` | mobile | mark an alert resolved |
-| `GET /bot/schedule` | bot | read due coaching, reminder, and no-response work owned by Lively's scheduler |
-| `POST /elders/:id/titipan` | mobile | queue a family message for companion relay |
-| `GET /bot/titipan` | bot | fetch queued titipan messages |
-| `PATCH /titipan/:id` | bot | mark titipan delivered or failed |
+| `POST /assessments/chair-test` | bot | record parsed chair-test result |
+| `POST /exercise-logs` | bot | record daily completion (idempotent per day), optional `photo_url` |
+| `POST /uploads/photo` | bot | multipart photo upload → `201 {url}`; the returned URL is what `photo_url` fields point at, served statically under `/uploads/` |
+| `GET /medications?elder_id=` | mobile | list active medications + today's per-slot status |
+| `POST /medications` | mobile | family adds a routine medication for the elder; syncs the full active schedule to `lively-bot` (§2b) |
+| `PATCH /medications/:id` | mobile | edit, or soft-disable via `active:false`; re-syncs the schedule to `lively-bot` |
+| `POST /medication-logs` | bot | record a taken/confirmed dose from a chat reply, optional `photo_url` |
+| `POST /alerts` | bot | raise pain/dizziness/missed-day/no-response/emergency/medication-missed alert → triggers push |
+| `GET /alerts?elder_id=&unresolved_only=` | mobile | `elder_id` optional — omitted means every alert across every elder the family member owns |
+| `PATCH /alerts/:id` | mobile | body `{resolved:true}` to resolve (idempotent), or `{type:'emergency'}` to manually escalate (CORE §6) — one endpoint, two actions, not two routes |
+| `POST /elders/:id/titipan` | mobile | family relay message |
+| `GET /elders/:id/titipan` | mobile | sent titipan history + delivery status |
+| `GET /bot/titipan-queue?elder_id=` | bot | undelivered titipan, oldest first |
+| `PATCH /bot/titipan/:id/delivered` | bot | mark a titipan delivered (idempotent) |
+| `GET /elders/:id/progress` | mobile | raw activity arrays + progress bar %, engagement streak, chart-ready history — see §7 |
+| `GET /elders/:id/report?period=week\|month` | mobile | family-facing performance summary — see §7 |
 
-Auth: mobile uses household-account JWT. Bot uses `BOT_SERVICE_KEY`. Landing uses no auth at MVP.
+Auth: mobile uses family member JWT (issued by backend). Bot uses a static `BOT_SERVICE_KEY` header — service-to-service, not a user session.
 
-### 3. Platform messaging permission and product consent
+### 2b. `lively-bot` service API (backend → bot)
 
-- Platform messaging permission is the WhatsApp/business prerequisite for business-initiated outreach. Family setup must not imply Lively can cold-message a phone number without valid platform permission.
-- Mobile records this as household attestation through `PATCH /elders/:id/whatsapp-permission`, with status, source, and timestamp. This is MVP product state for outreach gating, not a claim that Lively independently verifies legal compliance.
-- Revoked platform permission blocks future business-initiated outreach and blocks product-consent request templates until permission is recorded again.
-- Once platform messaging permission exists, Lively may send the first approved template asking for Lively product consent.
-- Platform messaging permission is not Lively product consent. It does not enable AI conversation, scheduled coaching/reminders, family chat visibility, or health-related event sharing.
-- Lively product consent is separate. The elder must explicitly consent in WhatsApp through `POST /bot/consent` before AI conversation, scheduled coaching/reminders, family chat visibility, or health-related event sharing starts.
-- Before Lively product consent, backend stores only setup data and permission/consent state needed to operate the account and request consent. Family chat visibility, scheduled coaching/reminders, health-related event sharing, and AI conversation stay off.
-- Elder consent, withdrawal, or pause must arrive from WhatsApp and be persisted with status, timestamp, and source. Withdrawal or pause stops scheduled coaching, reminders, conversation reads, and event sharing until consent is restored.
-- No legal compliance claim is made here. This is the product contract for MVP behavior.
+`lively-bot` is a stateless-per-call AI service with its own tiny HTTP surface (no DB, no WhatsApp credentials — it keeps per-elder memory in local SQLite/disk). The backend calls it at `BOT_REPLY_URL`, authenticated with `Authorization: Bearer <BOT_SERVICE_KEY>` (same shared secret, opposite direction):
 
-### 4. Companion persona contract
+| Endpoint | Caller | Purpose |
+|---|---|---|
+| `POST /reply` | backend | `{elderId, text, personalize?}` → `{reply}` — one conversational turn; LLM + tool rounds, may take tens of seconds, so the backend never blocks the Meta webhook on it. `personalize` is write-through cached bot-side |
+| `POST /soul` | backend | `{elderId, soul}` — one-time (re-)registration of the elder's companion profile (§3); pushed on elder create and on every relevant `PATCH /elders/:id` |
+| `POST /medications` | backend | `{elderId, medications[]}` — replaces the bot's whole tracked schedule for that elder (full active list, not a diff); synced on every medication create/update |
+
+The bot's LLM tool-calls flow back through the backend's `/bot/*`, `/assessments/*`, `/exercise-logs`, `/medication-logs`, `/alerts`, and `/uploads/photo` endpoints in §2.
+
+### 3. Companion persona contract
+
+At the product level there are two fixed personas (Mbak Asih, Mas Budi) — the `companions` table stores them, and mobile resolves display metadata (name/avatar/tint) from a client-side table keyed by `'mbak_asih'|'mas_budi'`.
+
+Amendment (verified 2026-07-17): `lively-bot` no longer hardcodes two persona prompts. It builds each elder's system prompt from a per-elder freeform **Soul**, registered by the backend via `POST /soul` (§2b) whenever the elder is created or updated:
 
 ```ts
-interface CompanionConfig {
-  key: "mbak_asih" | "mas_budi";
-  honorific: string;
-  healthFlags: string[];
-  timezone: string;
+// What the backend actually sends today (built from the elder row +
+// companions.display_name; timezone is the hardcoded single-market default):
+interface Soul {
+  companionName?: string;  // companions.display_name, e.g. "Mbak Asih"
+  elderName?: string;
+  honorific?: string;      // e.g. "Eyang Uti" — never a bare first name
+  language?: string;       // optional richer fields the Soul shape supports
+  culture?: string;
+  style?: string;
+  interests?: string[];
+  healthFlags?: string[];  // e.g. ["knee_pain", "hypertension"]
+  timezone?: string;       // "Asia/Jakarta"
+}
+
+// All fields optional — profile fills in gradually. Collected by mobile's
+// profile-completion flow (not the initial elder form), forwarded to
+// lively-bot with every POST /reply call. lively-bot folds this into the
+// same per-elder system prompt; the conversion is lively-bot's job, this
+// is just the raw material.
+interface ElderPersonalize {
+  family?: { name: string; relation: string }[];
+  hobbies?: string[];
+  favorite_topics?: string[];
+  avoid_topics?: string[];
+  speech_style?: string;
 }
 ```
 
-The system prompt text lives in `lively-bot`. The shared interface is only the data both backend and bot need to agree on.
+The system prompt text itself lives in `lively-bot` (not shared as data) — these interfaces are only the parameters that vary per elder.
 
-### 5. Human Texting Engine and WhatsApp constraints
+### 4. Human Texting Engine contract — 🟡 target behavior, NOT yet implemented
 
-- MVP WhatsApp interaction is text-only. Ordinary text links are allowed. There is no native video, photo, image upload, or media confirmation workflow.
-- Voice note ingestion and transcription are roadmap-only. They are outside MVP and outside the stretch plan.
-- Typing indicator is tied to the inbound-response flow and best-effort. If unavailable, the bot falls back to conservative pacing and split messages.
-- Business-initiated messages, including first contact and reminders outside WhatsApp's 24-hour customer service window, require valid platform messaging permission and approved templates.
-- Lively owns the scheduler for check-ins, medication reminders, and no-response checks.
-- Split-message request order is not guaranteed by the platform. Sequence conservatively, wait for delivery where practical, and pace messages even when typing indicator is unavailable.
+The product-level contract stays the goal:
 
-### 6. Medication reminder contract
+- Typing indicator before every outbound message; duration ≈ message length / (30–50 chars/sec), capped ~8s.
+- Output split into 1–3 short messages, each sent with its own typing pause.
+- No reply lands in under ~2s from trigger.
+- Morning check-ins sent at a randomized time in a window (e.g. 06:30–07:00), not a fixed second.
 
-- Medication scope is name, dosage label, schedule times, timezone, reminder send, text confirmation log, and missed threshold.
-- Family can update schedule fields or deactivate a medication. Deactivation stops future reminders and keeps history.
-- Text confirmation such as "sudah minum obat" records a `medication_logs` row. Photos, voice notes, and pill images are not accepted as log methods in MVP.
-- Lively does not check medical correctness, change doses, advise on missed doses, check interactions, or provide clinical guidance.
+**Actual current behavior (verified 2026-07-17):** no repo implements splitting, typing indicators, or artificial delays. Every companion reply and reminder goes out as a single WhatsApp text, sent by the backend (`shared/whatsapp.ts`) — the natural LLM round-trip latency is the only delay. The morning briefing is sent at a fixed 07:00 WIB, not a randomized window. If the engine gets built, it belongs in the backend's send path (the bot has no WhatsApp access); `lively-bot` is TypeScript/Node, not Python as earlier revisions of this doc claimed.
 
-### 7. Progress and Chair Stand contract
+| Repo | Implementation | Notes |
+|------|----------------|-------|
+| lively-backend | owns all WhatsApp sends; no timing behavior yet | would be where splitting/typing lands |
+| lively-bot | generates reply text only | stateless per-call, no send capability |
+| lively-mobile | none — reads finished conversation | no timing concern |
 
-- Chair Stand is a 30-second progress check of repetitions in a lower-body strength and endurance context.
-- It is not a diagnosis, clinical assessment, or standalone determination of health status.
-- Mobile reads exercise history and Chair Stand history through `GET /elders/:id/progress`.
+### 5. Medicine reminder & scheduling contract
 
-### 8. Event-based alert contract
+- Each active `medications` row has one or more `schedule_times` (e.g. `["07:00", "19:00"]`).
+- **Who schedules what (verified 2026-07-17):** `lively-bot`'s own scheduler (`src/reminders.ts`) owns medication reminders — it generates each nudge in-character from the elder's soul/personalize/memory context and delivers through `POST /bot/send` (15-minute late window, per-dose dedupe; a missed reminder is preferred over a duplicate). The backend's scheduler (`shared/scheduler.ts`) owns the daily 07:00 WIB morning exercise briefing plus a Monday chair-test prompt, sent directly over WhatsApp. Neither sends the other's messages — that would double-text the elder.
+- A confirmation in any casual form ("sudah minum obat", 👍, a photo of the pill) logs a `medication_logs` row via `POST /medication-logs`.
+- No confirmation within a grace window (🟡 default 2h, tune per elder) → does NOT itself raise an alert (elders forget to reply, not necessarily forget the dose) — it just shows as unconfirmed on the Progress screen. Repeated misses (🟡 default 2 consecutive) raises a `medication_missed` alert.
 
-- Alerts are event-based signals that require family follow-up. They are not verified emergencies and not continuous monitoring.
-- Allowed alert types: `missed_days`, `pain_mention`, `dizziness_mention`, `medication_missed`, `no_response`, `distress_message`.
-- `distress_message` can only come from explicit text the elder sends. The bot does not infer it from silence, media, sensors, or background monitoring.
-- Backend owns alert persistence and push dispatch. For each new alert, backend sends push to every active token in `device_registrations` for the shared household account.
-- Mobile owns device registration, push receipt/display, Alerts UI, and alert resolution.
+### 6. Safety escalation contract ("something happened to Eyang")
 
-## Config and secrets
+- `pain_mention` / `dizziness_mention`: `lively-bot`'s LLM layer detects these in the elder's own words and raises the alert immediately — never waits for the next scheduled check-in.
+- `no_response`: if the elder doesn't reply to a direct check-in (morning greeting or exercise prompt) within a defined window (🟡 default 12h), `lively-bot` raises `no_response`. This is a softer signal than `emergency` — pushes to family as "no reply from Eyang today, worth a call."
+- `emergency`: an explicit distress signal — the elder texts something alarming (a fall, can't get up, chest pain), the elder taps the "Notify Caregiver" button card in WhatsApp (handled in `POST /webhook`, which raises the alert and re-sends a fresh card), or family manually escalates an alert from the app. Distinct from `no_response` because it pushes immediately and with higher urgency copy, not just a nudge.
+- All alert types share one delivery path: `POST /alerts` → backend stores it → triggers a push to every `family_members` row linked to that elder (not just the one who set up the companion, if multiple caregivers exist — 🟡 multi-caregiver support itself is a non-goal at MVP per each repo's SPEC, but the alert fan-out should not hardcode a single recipient).
 
-- All secrets use env vars and are never committed. Ship `.env.example` with names only.
-- Shared names: `DATABASE_URL`, `BOT_SERVICE_KEY`, `BACKEND_API_URL`, `JWT_SECRET`.
-- Repo-specific vars, such as WhatsApp tokens, OpenAI key, backend push-provider credentials, and client app identifiers, live in each repo's `.env.example` by name only.
+### 7. Gamification & family-reporting contract
+
+Driven by mentor/judge feedback: makes checking in on Eyang feel like watching progress, not monitoring a chore. No new tables — everything here is computed from `chair_test_results`, `exercise_logs`, `medication_logs`, `medications` at read time.
+
+**Progress bar** (`GET /elders/:id/progress` → `overall_progress_pct`, 0–100): unweighted average of three sub-scores, each capped at 100:
+- chair-test score: `latest_reps / 15 * 100`
+- exercise score: `current_streak_days / 7 * 100`
+- medication score: `last7d_taken / last7d_scheduled * 100`
+
+The 15-rep and 7-day benchmarks are demo tuning constants, not clinical thresholds — adjust freely, just keep mobile and backend using the same numbers.
+
+**Engagement streak** (`GET /elders/:id/progress` → `engagement_streak_days`): consecutive calendar days with at least one of {`exercise_logs` row, `medication_logs` row, `chair_test_results` row}. Broader than the exercise-only streak already in `exercise.current_streak_days` — this is the single "🔥 N day streak" number the Progress screen leads with.
+
+**Progress graphs** (`GET /elders/:id/progress`, chart-ready, oldest→newest):
+- `chair_tests`: reps over time, capped last 20
+- `exercise.this_week`: the **current Monday–Sunday calendar week** (not a rolling window — the day-dot streak row needs real "future" days when today isn't Sunday yet), `[{date, status: 'done'|'missed'|'future'}]`
+- `exercise_history`: last 30 days, rolling, `[{date, completed}]`
+- `medication_adherence`: `{last7d_taken, last7d_scheduled, pct, unconfirmed_today}`
+- `medication_adherence_trend`: last 30 days, rolling, `[{date, taken, scheduled}]`
+
+`GET /elders/:id/progress` also returns the raw `chair_test_results`, `exercise_logs`, `medications` (active and inactive), and `medication_logs` arrays alongside the computed fields above — mobile's Home "today at a glance" row reads these directly rather than re-deriving them from the aggregates.
+
+**Elder responses carry `companion_key`, not just `companion_id`:** the two companions are fixed personas — mobile resolves display metadata (name/avatar/tint) from a client-side table keyed by `'mbak_asih'|'mas_budi'`, not a server round-trip, so it needs the key, not just an opaque id.
+
+**Performance report** (`GET /elders/:id/report?period=week|month`, family JWT + ownership): a family-facing summary, not an elder-facing one — different audience, different tone. Always lead positive; "areas needing support" is framed as encouragement, never a guilt trip (per the feedback: this should not feel like a burden to check). Copy is Indonesian, matching the rest of the product (an earlier revision of this doc showed an English example and the backend briefly followed it literally — that was the odd one out, not the rest of the app). Shape and algorithm here are mirrored exactly in `lively-mobile/lib/api/mocks/computeReport.ts`, the actual reference implementation both sides now agree on.
+```json
+{
+  "period": "week",
+  "range_start": "2026-07-11",
+  "range_end": "2026-07-17",
+  "has_data": true,
+  "headline": "Eyang Uti cukup aktif minggu ini, 5 dari 7 hari.",
+  "consistency_pct": 71,
+  "exercise_completion_pct": 57,
+  "medication_adherence_pct": 90,
+  "chair_test_latest": 12,
+  "chair_test_delta": 3,
+  "highlights": ["Tes kursi naik dari 9 ke 12 kali, kekuatan kaki membaik."],
+  "areas_needing_support": []
+}
+```
+`chair_test_latest`/`chair_test_delta` are numeric (latest reps in range, and the change from first to last — `null` if fewer than 2 chair tests fall in the window), not a categorical trend string. `has_data` is `false` only when zero days in the window have any activity at all — the zero-state headline is still a real string, not an empty one, so mobile can render it directly in the empty state.
+
+## Config & secrets
+- All secrets via env vars; never committed. Ship `.env.example` only (names, no values).
+- Shared names: `DATABASE_URL`, `BOT_SERVICE_KEY`, `BACKEND_API_URL`, `JWT_SECRET`, `BOT_REPLY_URL` (backend → bot base URL, §2b).
+- Repo-specific vars (WhatsApp tokens — `WHATSAPP_VERIFY_TOKEN`, `META_APP_SECRET`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID` — OpenAI key, push credentials) documented per repo's own `.env.example`.
 
 ## Build status
-
-🟡 Design doc, not yet implemented. This is Day 1 of Garuda Hacks 7.0 (2026-07-16). Schema and endpoints above are the target shape for the hackathon build, not a published package. If the schema drifts during implementation, update this file in all four repos before continuing.
+🟢 Implemented — reconciled against the actual code in all four repos on 2026-07-17 (Day 2 of Garuda Hacks 7.0). Known gaps vs. the original design are flagged inline: the Human Texting Engine (§4) is target behavior only, and the morning briefing time is fixed, not randomized. If the schema or contract drifts further, update this file in all four repos before continuing — don't let the interfaces fork.
