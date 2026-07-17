@@ -1,49 +1,45 @@
 # lively-bot - Plan
 
-**Window:** 2026-07-16 to 2026-07-18 (Garuda Hacks 7.0, offline). About 3 days. Solo/small-team repo owner. This is the highest-risk repo because WhatsApp connection behavior and real-time text pacing must work live.
+**Window:** 2026-07-16 to 2026-07-18 (Garuda Hacks 7.0, offline). About 3 days. Solo/small-team repo owner. Architecture changed on 2026-07-17: this repo dropped WhatsApp/Telegram platform integration and is now a pure AI reply service called by `lively-backend`. The highest-risk work — WhatsApp connection lifecycle, webhook verification, delivery pacing — moved to `lively-backend` and is out of scope here.
 
-## Setup (Day 0 / early Day 1)
+## Setup
 
-- Env: `WHATSAPP_CLOUD_API_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VERIFY_TOKEN`, `OPENAI_API_KEY`, `OPENAI_MODEL`, `BACKEND_API_URL`, `BOT_SERVICE_KEY`. Ship `.env.example` only.
-- Accounts: Meta developer app, configured WhatsApp Cloud API webhook, dedicated Meta WhatsApp test number or configured phone number, OpenAI API key.
-- Tooling: Python, FastAPI or Flask still TBD for the webhook, APScheduler or a simple loop still TBD for Lively-owned scheduling, OpenAI for companion replies.
-- Repo: public; README skeleton + license + `.gitignore` already planned.
+- Env: `PORT`, `OPENAI_API_KEY`, `OPENAI_MODEL`, `BACKEND_API_URL`, `BOT_SERVICE_KEY`, `MEMORY_DIR`. Ship `.env.example` only.
+- Tooling: Node/TypeScript, `node:http` (no framework), OpenAI SDK for companion replies, `node:test` for tests.
+- Repo: public; README, LICENSE, `.gitignore` in place.
 
 ## Definition of Done
 
-1. Meta WhatsApp Cloud API echo bot receives and sends real text messages on a phone.
-2. Human Texting Engine works for inbound-response flow: split text, pace conservatively, use typing indicator best-effort, and fall back cleanly if unavailable.
-3. Both companions hold a text conversation and use backend consent-gated context.
-4. Backend-driven consent gate keeps platform messaging permission separate from Lively product consent. First contact and reminders outside WhatsApp's 24-hour customer service window use approved templates only when platform permission exists, and product consent still gates when the bot may start AI conversation, scheduled coaching/reminders, family chat visibility, or health-related event sharing.
-5. 30-second Chair Stand flow guides the elder, parses a messy text reply, and logs repetitions through backend.
-6. Daily exercise check-in and medication reminders fire from Lively-owned scheduler and log text confirmations.
-7. Event-based alert creation works for pain mention, dizziness mention, missed days, medication missed, no response, and explicit distress text.
+1. `POST /reply` accepts `{ elderId, text }` authenticated with `BOT_SERVICE_KEY`, and returns `{ reply }` generated in-character by the assigned companion persona.
+2. Per-elder conversation memory persists across calls and stays bounded (`src/memory/store.ts`).
+3. Both companion personas (Mbak Asih, Mas Budi) hold a coherent text conversation using backend-supplied elder context (honorific, health flags, timezone).
+4. Tool calls from within a reply — exercise-log completion, Chair Stand repetition parsing, event-based alert creation — successfully call back into `lively-backend` using `BOT_SERVICE_KEY`.
+5. `lively-backend` can drive a full round trip: elder WhatsApp message in, `/reply` call to this repo, AI text out, backend sends it back over WhatsApp.
 
 ## Day-by-day
 
-**Day 1 - 2026-07-16 - WhatsApp connectivity + Human Texting Engine**
+**Day 1 - 2026-07-16 - initial scaffold**
 
-- Cloud API echo bot: configure Meta developer app webhook verification, receive a text message, send one back through the test number, test on a real phone.
-- Validate official Meta-compatible typing indicator behavior in inbound-response flow. 🔴 If it does not render, fall back to timed message splitting and conservative pacing immediately.
-- Build Human Texting Engine middleware: split, sequence conservatively, wait for delivery where practical, pace, send. Do not assume split-message request order is guaranteed.
-- Draft both companion prompts, parameterized by honorific, health flags, timezone, platform permission state, and product consent status.
+- Node/TypeScript project scaffolded with WhatsApp (Baileys) and Telegram clients, OpenAI companion loop, file-backed memory, tool-call framework, two companion personas.
+- This was built against the original architecture where the bot owned platform messaging directly.
 
-**Day 2 - 2026-07-17 - platform permission, product consent, conversation, scheduler**
+**Day 2 - 2026-07-17 - architecture split to AI-only service**
 
-- Wire backend auth with `BOT_SERVICE_KEY` and implement product consent writes through `POST /bot/consent`; do not send product-consent templates unless platform messaging permission exists.
-- Wire conversation state and logging through `POST /bot/inbound`, `POST /bot/outbound`, and `GET /elders/:id`.
-- Build 30-second Chair Stand text flow and log via `POST /assessments/chair-test`.
-- Build Lively-owned scheduler reading `GET /bot/schedule` for coaching, medication reminders, and no-response checks.
-- Build event creation via `POST /alerts`. Keep alerts as follow-up signals, not verified incidents.
+- Removed `src/whatsapp/*` and `src/telegram/*` (Baileys, grammy, qrcode-terminal, `@hapi/boom` dropped from `package.json`). Backend now owns all WhatsApp integration.
+- Removed `src/texting.ts` (splitting/pacing) — that responsibility moves to backend's Human Texting Engine.
+- Added `src/server.ts`: minimal `node:http` server exposing `POST /reply`, authenticated with `BOT_SERVICE_KEY`, wired to the existing `companion.ts` reply loop.
+- Updated `src/config.ts`/`src/index.ts` to boot the HTTP server instead of platform clients; added `node:test` coverage for the new route.
+- Remaining: confirm the exact request/response contract with `lively-backend` (field names, error shape, timeout expectations) and update `CORE.md`'s bot-facing sections if the contract differs from `POST /reply {elderId, text} -> {reply}`.
 
-**Day 3 - 2026-07-18 - polish, demo rehearsal, submit**
+**Day 3 - 2026-07-18 - integration, polish, demo rehearsal, submit**
 
-- Seed a believable text conversation for demo elder "Eyang Uti" through backend.
-- Rehearse live demo 3 times: opt-in, typing/pacing, Chair Stand reply, medication confirmation, alert signal.
+- Integration test against a real (or stubbed) `lively-backend`: consent-gated call into `/reply`, tool calls landing in backend, reply text flowing back out.
+- Seed a believable text conversation for demo elder "Eyang Uti" through backend, driven by this repo's replies.
+- Rehearse live demo 3 times end to end: WhatsApp in -> backend -> `/reply` -> WhatsApp out, Chair Stand reply, medication confirmation, alert signal.
 - Submit with margin before deadline.
 
 ## Honest feasibility verdict
 
-This repo is most likely to slip because Meta Cloud API setup friction is real: developer app setup, webhook verification, test-number configuration, and approved templates for business-initiated sends can slow first contact and reminder flows. Typing-indicator behavior is also unverified until tested live. Mitigation: prove real text send/receive and typing-indicator fallback in the first hour of Day 1.
+Risk shifted out of this repo. The remaining risk here is contract drift with `lively-backend` (field names, auth header, error handling) and making sure conversation memory keys (`elderId`) match what backend actually sends. Both are cheap to fix compared to the WhatsApp connectivity risk this repo carried before the split.
 
-Cut-order if time compresses: drop titipan first, then medication reminders, then no-response alert. Keep text conversation, platform permission/product consent gates, one companion persona, Chair Stand flow, and pain/dizziness event creation because those carry the demo spine. Voice note transcription is not in MVP or stretch.
+Cut-order if time compresses: drop titipan relay tool first, then alert types beyond `pain_mention`/`distress_message`, then Chair Stand parsing. Keep `/reply` working end to end with one companion persona and basic conversation memory — that's the demo spine now that WhatsApp itself is backend's problem.
