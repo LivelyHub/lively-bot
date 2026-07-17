@@ -10,4 +10,7 @@ export const env = {
   openrouterBaseUrl: process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1",
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN,
   whatsappEnabled: process.env.WHATSAPP_ENABLED === "true",
+  backendApiUrl: process.env.BACKEND_API_URL,
+  botServiceKey: process.env.BOT_SERVICE_KEY,
+  memoryDir: process.env.MEMORY_DIR ?? "./data/memory",
 };
