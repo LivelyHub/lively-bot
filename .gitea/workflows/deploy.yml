@@ -31,7 +31,7 @@ jobs:
           docker run -d \
             --name lively-bot \
             --restart unless-stopped \
-            -p 7002:3000 \
+            -p 7002:7002 \
             --env-file .env.deploy \
             -v lively-bot-data:/app/data \
             lively-bot:${{ gitea.sha }}
@@ -49,7 +49,7 @@ jobs:
               docker logs lively-bot 2>&1 | tail -50 || true
               exit 1
             fi
-            if docker exec lively-bot node -e "fetch('http://localhost:3000/reply',{method:'POST',headers:{'content-type':'application/json'},body:'{}'}).then(r=>{console.log('HTTP '+r.status);process.exit([400,401].includes(r.status)?0:2)}).catch(()=>process.exit(3))"; then
+            if docker exec lively-bot node -e "fetch('http://localhost:7002/reply',{method:'POST',headers:{'content-type':'application/json'},body:'{}'}).then(r=>{console.log('HTTP '+r.status);process.exit([400,401].includes(r.status)?0:2)}).catch(()=>process.exit(3))"; then
               echo "service is up"
               exit 0
             fi

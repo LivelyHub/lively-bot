@@ -1,7 +1,7 @@
 import "dotenv/config";
 
 export const env = {
-  port: Number(process.env.PORT ?? 3000),
+  port: Number(process.env.PORT ?? 7002),
   openaiApiKey: process.env.OPENAI_API_KEY,
   openaiModel: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
   openaiBaseUrl: process.env.OPENAI_BASE_URL,

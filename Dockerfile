@@ -14,7 +14,7 @@ RUN npm run build && npm prune --omit=dev
 FROM node:20-slim
 WORKDIR /app
 ENV NODE_ENV=production \
-    PORT=3000 \
+    PORT=7002 \
     DATABASE_PATH=/app/data/lively.db
 
 COPY --from=build /app/node_modules ./node_modules
@@ -24,5 +24,5 @@ COPY package.json ./
 RUN mkdir -p /app/data && chown -R node:node /app/data
 USER node
 
-EXPOSE 3000
+EXPOSE 7002
 CMD ["node", "dist/index.js"]
