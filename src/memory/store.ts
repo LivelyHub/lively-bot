@@ -13,6 +13,17 @@ export type ArchivedTurn = { id: number; role: "user" | "assistant"; content: st
 
 export type Remembrance = { summary: string; lastArchiveId: number };
 
+export type Medication = {
+  id: number;
+  name: string;
+  dose: string | null;
+  /** Free-text schedule, e.g. "07:00 and 19:00, after meals". */
+  schedule: string;
+  notes: string | null;
+};
+
+export type MedicationInput = { name: string; dose?: string; schedule: string; notes?: string };
+
 export interface MemoryStore {
   /** Live conversation window (never includes the system message). */
   getHistory(id: string): ChatMessage[];
@@ -31,6 +42,14 @@ export interface MemoryStore {
   /** Per-elder companion profile, registered once by the backend at onboarding. */
   getSoul(id: string): Soul | null;
   setSoul(id: string, soul: Soul): void;
+
+  /** Active medication schedule for one elder. */
+  listMedications(id: string): Medication[];
+  addMedication(id: string, med: MedicationInput): number;
+  /** Deactivates by name (case-insensitive); returns how many were stopped. */
+  stopMedication(id: string, name: string): number;
+  /** Replaces the elder's whole schedule (backend sync at registration/update). */
+  replaceMedications(id: string, meds: MedicationInput[]): void;
 }
 
 class SqliteMemoryStore implements MemoryStore {
@@ -69,6 +88,18 @@ class SqliteMemoryStore implements MemoryStore {
         soul TEXT NOT NULL,
         updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
       );
+
+      CREATE TABLE IF NOT EXISTS medications (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        elder_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        dose TEXT,
+        schedule TEXT NOT NULL,
+        notes TEXT,
+        active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_medications_elder ON medications (elder_id, active);
     `);
 
     this.stmts = {
@@ -90,6 +121,18 @@ class SqliteMemoryStore implements MemoryStore {
         "SELECT summary, last_archive_id AS lastArchiveId FROM remembrances WHERE elder_id = ?"
       ),
       getSoul: this.db.prepare("SELECT soul FROM souls WHERE elder_id = ?"),
+      listMedications: this.db.prepare(
+        "SELECT id, name, dose, schedule, notes FROM medications WHERE elder_id = ? AND active = 1 ORDER BY id"
+      ),
+      addMedication: this.db.prepare(
+        "INSERT INTO medications (elder_id, name, dose, schedule, notes) VALUES (?, ?, ?, ?, ?)"
+      ),
+      stopMedication: this.db.prepare(
+        "UPDATE medications SET active = 0 WHERE elder_id = ? AND active = 1 AND lower(name) = lower(?)"
+      ),
+      deactivateMedications: this.db.prepare(
+        "UPDATE medications SET active = 0 WHERE elder_id = ? AND active = 1"
+      ),
       setSoul: this.db.prepare(`
         INSERT INTO souls (elder_id, soul, updated_at)
         VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
@@ -160,6 +203,29 @@ class SqliteMemoryStore implements MemoryStore {
 
   setSoul(id: string, soul: Soul): void {
     this.stmts.setSoul.run(id, JSON.stringify(soul));
+  }
+
+  listMedications(id: string): Medication[] {
+    return this.stmts.listMedications.all(id) as Medication[];
+  }
+
+  addMedication(id: string, med: MedicationInput): number {
+    const result = this.stmts.addMedication.run(id, med.name, med.dose ?? null, med.schedule, med.notes ?? null);
+    return Number(result.lastInsertRowid);
+  }
+
+  stopMedication(id: string, name: string): number {
+    return this.stmts.stopMedication.run(id, name).changes;
+  }
+
+  replaceMedications(id: string, meds: MedicationInput[]): void {
+    const replaceAll = this.db.transaction((rows: MedicationInput[]) => {
+      this.stmts.deactivateMedications.run(id);
+      for (const med of rows) {
+        this.stmts.addMedication.run(id, med.name, med.dose ?? null, med.schedule, med.notes ?? null);
+      }
+    });
+    replaceAll(meds);
   }
 }
 

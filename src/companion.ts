@@ -15,9 +15,19 @@ export async function reply(id: string, text: string): Promise<string> {
   // elder's registered soul and the latest long-term notes about them.
   const soul = memory.getSoul(id);
   const { summary } = memory.getRemembrance(id);
-  const system = summary
-    ? `${buildSystemPrompt(soul)}\n\nWhat you remember about this elder from earlier conversations:\n${summary}`
-    : buildSystemPrompt(soul);
+  let system = buildSystemPrompt(soul);
+
+  const meds = memory.listMedications(id);
+  if (meds.length > 0) {
+    const lines = meds.map(
+      (m) => `- ${m.name}${m.dose ? ` (${m.dose})` : ""} — ${m.schedule}${m.notes ? ` [${m.notes}]` : ""}`
+    );
+    system += `\n\nTheir medication schedule (weave gentle check-ins around these times into normal conversation; when they confirm or miss a dose, log it with log_medication_confirmation; never push or scold):\n${lines.join("\n")}`;
+  }
+
+  if (summary) {
+    system += `\n\nWhat you remember about this elder from earlier conversations:\n${summary}`;
+  }
 
   const history: ChatMessage[] = [
     { role: "system", content: system },

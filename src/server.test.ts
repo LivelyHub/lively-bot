@@ -37,6 +37,16 @@ test("POST /soul rejects missing soul object", async () => {
   });
 });
 
+test("POST /medications rejects entries without name/schedule", async () => {
+  await withServer(async (port) => {
+    const res = await fetch(`http://localhost:${port}/medications`, {
+      method: "POST",
+      body: JSON.stringify({ elderId: "e1", medications: [{ name: "Amlodipine" }] }),
+    });
+    assert.equal(res.status, 400);
+  });
+});
+
 test("unknown route returns 404", async () => {
   await withServer(async (port) => {
     const res = await fetch(`http://localhost:${port}/nope`, { method: "POST" });
