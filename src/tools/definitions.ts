@@ -82,6 +82,11 @@ export const TOOLS: ToolDefinition[] = [
             name: { type: "string", description: "Medication name as the elder calls it." },
             dose: { type: "string", description: "Dose if mentioned, e.g. '1 tablet 5mg'." },
             schedule: { type: "string", description: "When they take it, in their own words, e.g. 'pagi jam 7 dan malam setelah makan'." },
+            times: {
+              type: "array",
+              items: { type: "string" },
+              description: "The same schedule as 24h clock times, e.g. ['07:00','19:00']. Used to send them reminders at the right moment — include it whenever the schedule implies times of day.",
+            },
             notes: { type: "string", description: "Anything else relevant, e.g. 'from Dr. Sari, for blood pressure'." },
           },
           required: ["name", "schedule"],
@@ -94,6 +99,7 @@ export const TOOLS: ToolDefinition[] = [
         dose: args.dose,
         schedule: args.schedule,
         notes: args.notes,
+        times: Array.isArray(args.times) ? args.times.filter((t: unknown) => typeof t === "string") : undefined,
       });
       return { ok: true, medicationId: id };
     },

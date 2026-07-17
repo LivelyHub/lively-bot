@@ -72,7 +72,15 @@ export function createBotServer() {
       const { elderId, medications } = payload as { elderId: string; medications: MedicationInput[] };
       const valid =
         Array.isArray(medications) &&
-        medications.every((m) => m && typeof m.name === "string" && m.name && typeof m.schedule === "string" && m.schedule);
+        medications.every(
+          (m) =>
+            m &&
+            typeof m.name === "string" &&
+            m.name &&
+            typeof m.schedule === "string" &&
+            m.schedule &&
+            (m.times === undefined || (Array.isArray(m.times) && m.times.every((t) => typeof t === "string")))
+        );
       if (!elderId || !valid) {
         send(res, 400, { error: "elderId and medications[] with name and schedule are required" });
         return;

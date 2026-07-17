@@ -20,9 +20,11 @@ export type Medication = {
   /** Free-text schedule, e.g. "07:00 and 19:00, after meals". */
   schedule: string;
   notes: string | null;
+  /** Structured dose times ("HH:MM", 24h, elder-local) used for proactive reminders. */
+  times: string[];
 };
 
-export type MedicationInput = { name: string; dose?: string; schedule: string; notes?: string };
+export type MedicationInput = { name: string; dose?: string; schedule: string; notes?: string; times?: string[] };
 
 export interface MemoryStore {
   /** Live conversation window (never includes the system message). */
@@ -50,6 +52,11 @@ export interface MemoryStore {
   stopMedication(id: string, name: string): number;
   /** Replaces the elder's whole schedule (backend sync at registration/update). */
   replaceMedications(id: string, meds: MedicationInput[]): void;
+  listEldersWithMedications(): string[];
+
+  /** Reminder dedupe: has this med+due-slot already been reminded? */
+  wasReminded(id: string, medicationId: number, dueKey: string): boolean;
+  markReminded(id: string, medicationId: number, dueKey: string): void;
 }
 
 class SqliteMemoryStore implements MemoryStore {
@@ -96,11 +103,26 @@ class SqliteMemoryStore implements MemoryStore {
         dose TEXT,
         schedule TEXT NOT NULL,
         notes TEXT,
+        times TEXT,
         active INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
       );
       CREATE INDEX IF NOT EXISTS idx_medications_elder ON medications (elder_id, active);
+
+      CREATE TABLE IF NOT EXISTS reminders_log (
+        elder_id TEXT NOT NULL,
+        medication_id INTEGER NOT NULL,
+        due_key TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        PRIMARY KEY (elder_id, medication_id, due_key)
+      );
     `);
+
+    // Migration for databases created before the times column existed.
+    const medCols = this.db.pragma("table_info(medications)") as { name: string }[];
+    if (!medCols.some((c) => c.name === "times")) {
+      this.db.exec("ALTER TABLE medications ADD COLUMN times TEXT");
+    }
 
     this.stmts = {
       getHistory: this.db.prepare("SELECT history FROM histories WHERE elder_id = ?"),
@@ -122,10 +144,19 @@ class SqliteMemoryStore implements MemoryStore {
       ),
       getSoul: this.db.prepare("SELECT soul FROM souls WHERE elder_id = ?"),
       listMedications: this.db.prepare(
-        "SELECT id, name, dose, schedule, notes FROM medications WHERE elder_id = ? AND active = 1 ORDER BY id"
+        "SELECT id, name, dose, schedule, notes, times FROM medications WHERE elder_id = ? AND active = 1 ORDER BY id"
       ),
       addMedication: this.db.prepare(
-        "INSERT INTO medications (elder_id, name, dose, schedule, notes) VALUES (?, ?, ?, ?, ?)"
+        "INSERT INTO medications (elder_id, name, dose, schedule, notes, times) VALUES (?, ?, ?, ?, ?, ?)"
+      ),
+      eldersWithMedications: this.db.prepare(
+        "SELECT DISTINCT elder_id FROM medications WHERE active = 1"
+      ),
+      wasReminded: this.db.prepare(
+        "SELECT 1 FROM reminders_log WHERE elder_id = ? AND medication_id = ? AND due_key = ?"
+      ),
+      markReminded: this.db.prepare(
+        "INSERT OR IGNORE INTO reminders_log (elder_id, medication_id, due_key) VALUES (?, ?, ?)"
       ),
       stopMedication: this.db.prepare(
         "UPDATE medications SET active = 0 WHERE elder_id = ? AND active = 1 AND lower(name) = lower(?)"
@@ -206,12 +237,31 @@ class SqliteMemoryStore implements MemoryStore {
   }
 
   listMedications(id: string): Medication[] {
-    return this.stmts.listMedications.all(id) as Medication[];
+    const rows = this.stmts.listMedications.all(id) as (Omit<Medication, "times"> & { times: string | null })[];
+    return rows.map((r) => {
+      let times: string[] = [];
+      try {
+        if (r.times) times = JSON.parse(r.times);
+      } catch {
+        /* treat unparseable times as none */
+      }
+      return { ...r, times };
+    });
+  }
+
+  private insertMedication(id: string, med: MedicationInput) {
+    return this.stmts.addMedication.run(
+      id,
+      med.name,
+      med.dose ?? null,
+      med.schedule,
+      med.notes ?? null,
+      med.times?.length ? JSON.stringify(med.times) : null
+    );
   }
 
   addMedication(id: string, med: MedicationInput): number {
-    const result = this.stmts.addMedication.run(id, med.name, med.dose ?? null, med.schedule, med.notes ?? null);
-    return Number(result.lastInsertRowid);
+    return Number(this.insertMedication(id, med).lastInsertRowid);
   }
 
   stopMedication(id: string, name: string): number {
@@ -221,11 +271,22 @@ class SqliteMemoryStore implements MemoryStore {
   replaceMedications(id: string, meds: MedicationInput[]): void {
     const replaceAll = this.db.transaction((rows: MedicationInput[]) => {
       this.stmts.deactivateMedications.run(id);
-      for (const med of rows) {
-        this.stmts.addMedication.run(id, med.name, med.dose ?? null, med.schedule, med.notes ?? null);
-      }
+      for (const med of rows) this.insertMedication(id, med);
     });
     replaceAll(meds);
+  }
+
+  listEldersWithMedications(): string[] {
+    const rows = this.stmts.eldersWithMedications.all() as { elder_id: string }[];
+    return rows.map((r) => r.elder_id);
+  }
+
+  wasReminded(id: string, medicationId: number, dueKey: string): boolean {
+    return this.stmts.wasReminded.get(id, medicationId, dueKey) !== undefined;
+  }
+
+  markReminded(id: string, medicationId: number, dueKey: string): void {
+    this.stmts.markReminded.run(id, medicationId, dueKey);
   }
 }
 
