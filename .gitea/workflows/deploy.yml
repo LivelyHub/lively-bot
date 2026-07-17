@@ -37,13 +37,27 @@ jobs:
             lively-bot:${{ gitea.sha }}
           rm -f .env.deploy
 
+      # The job may run inside the act_runner's own container, where localhost
+      # is not the host — so probe through the Docker daemon with `docker exec`
+      # instead of curling the published host port.
       - name: Verify container is serving
         run: |
-          sleep 3
-          docker ps --filter name=lively-bot --filter status=running --format '{{.Names}}' | grep -q '^lively-bot$'
-          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:7002/reply -H 'Content-Type: application/json' -d '{}')
-          echo "service responded with HTTP $code"
-          test "$code" = "400" -o "$code" = "401"
+          for i in $(seq 1 10); do
+            status=$(docker inspect -f '{{.State.Status}}' lively-bot 2>/dev/null || echo missing)
+            if [ "$status" != "running" ]; then
+              echo "container status: $status"
+              docker logs lively-bot 2>&1 | tail -50 || true
+              exit 1
+            fi
+            if docker exec lively-bot node -e "fetch('http://localhost:3000/reply',{method:'POST',headers:{'content-type':'application/json'},body:'{}'}).then(r=>{console.log('HTTP '+r.status);process.exit([400,401].includes(r.status)?0:2)}).catch(()=>process.exit(3))"; then
+              echo "service is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "service did not come up in time"
+          docker logs lively-bot 2>&1 | tail -50 || true
+          exit 1
 
       - name: Prune old images
         if: success()
