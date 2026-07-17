@@ -12,5 +12,5 @@ export const env = {
   whatsappEnabled: process.env.WHATSAPP_ENABLED === "true",
   backendApiUrl: process.env.BACKEND_API_URL,
   botServiceKey: process.env.BOT_SERVICE_KEY,
-  memoryDir: process.env.MEMORY_DIR ?? "./data/memory",
+  databasePath: process.env.DATABASE_PATH ?? "./data/lively.db",
 };

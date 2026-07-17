@@ -2,6 +2,8 @@ import { chat } from "./llmClient.js";
 import { buildSystemPrompt, DEFAULT_ELDER_CONTEXT, type ElderContext } from "./soul/prompt.js";
 import { toOpenAITools, runTool } from "./tools/index.js";
 import { createMemoryStore, type ChatMessage } from "./memory/store.js";
+import { archivableTurns, consolidate } from "./memory/remember.js";
+import { logger } from "./logger.js";
 
 const MAX_HISTORY = 20;
 const MAX_TOOL_ROUNDS = 3;
@@ -9,11 +11,18 @@ const MAX_TOOL_ROUNDS = 3;
 const memory = createMemoryStore();
 
 export async function reply(id: string, text: string, context: ElderContext = DEFAULT_ELDER_CONTEXT): Promise<string> {
-  let history = await memory.getHistory(id);
-  if (history.length === 0) {
-    history = [{ role: "system", content: buildSystemPrompt(context) }];
-  }
-  history.push({ role: "user", content: text });
+  // The system prompt is rebuilt every turn (not stored) so it always carries the
+  // current persona context and the latest long-term notes about this elder.
+  const { summary } = memory.getRemembrance(id);
+  const system = summary
+    ? `${buildSystemPrompt(context)}\n\nWhat you remember about this elder from earlier conversations:\n${summary}`
+    : buildSystemPrompt(context);
+
+  const history: ChatMessage[] = [
+    { role: "system", content: system },
+    ...memory.getHistory(id),
+    { role: "user", content: text },
+  ];
 
   const toolCtx = { elderId: id };
   let answer = "";
@@ -33,19 +42,25 @@ export async function reply(id: string, text: string, context: ElderContext = DE
     }
   }
 
-  await memory.setHistory(id, trimHistory(history));
+  const { kept, dropped } = trimHistory(history.slice(1));
+  memory.setHistory(id, kept);
+
+  if (dropped.length > 0) {
+    memory.archiveTurns(id, archivableTurns(dropped));
+    // Runs after the reply is on its way so it never adds latency to the conversation.
+    void consolidate(memory, id).catch((err) => {
+      logger.error({ err, id }, "Remembrance consolidation failed");
+    });
+  }
+
   return answer;
 }
 
 /** Drops oldest turns once history grows past MAX_HISTORY, always cutting at a user-message
  * boundary so an assistant tool_calls message never gets separated from its tool results. */
-function trimHistory(history: ChatMessage[]): ChatMessage[] {
-  if (history.length <= MAX_HISTORY + 1) return history;
-  const overflow = history.length - (MAX_HISTORY + 1);
-  let cut = 1;
-  while (cut < overflow + 1 && cut < history.length) {
-    if (history[cut].role === "user") break;
-    cut++;
-  }
-  return [history[0], ...history.slice(cut)];
+function trimHistory(history: ChatMessage[]): { kept: ChatMessage[]; dropped: ChatMessage[] } {
+  if (history.length <= MAX_HISTORY) return { kept: history, dropped: [] };
+  let cut = history.length - MAX_HISTORY;
+  while (cut < history.length && history[cut].role !== "user") cut++;
+  return { kept: history.slice(cut), dropped: history.slice(0, cut) };
 }
