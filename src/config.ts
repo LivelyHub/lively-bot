@@ -1,7 +1,12 @@
 import "dotenv/config";
 
+function parsePort(raw: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(raw ?? "", 10);
+  return Number.isInteger(parsed) && parsed > 0 && parsed < 65536 ? parsed : fallback;
+}
+
 export const env = {
-  port: Number(process.env.PORT ?? 3000),
+  port: parsePort(process.env.PORT, 7002),
   openaiApiKey: process.env.OPENAI_API_KEY,
   openaiModel: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
   openaiBaseUrl: process.env.OPENAI_BASE_URL,

@@ -1,5 +1,5 @@
 import { chat } from "./llmClient.js";
-import { buildSystemPrompt, DEFAULT_ELDER_CONTEXT, type ElderContext } from "./soul/prompt.js";
+import { buildSystemPrompt, type ElderPersonalize } from "./soul/prompt.js";
 import { toOpenAITools, runTool } from "./tools/index.js";
 import { createMemoryStore, type ChatMessage } from "./memory/store.js";
 import { archivableTurns, consolidate } from "./memory/remember.js";
@@ -11,22 +11,33 @@ const MAX_TOOL_ROUNDS = 3;
 
 const memory = createMemoryStore();
 
-export async function reply(id: string, text: string, context: ElderContext = DEFAULT_ELDER_CONTEXT): Promise<string> {
+export async function reply(id: string, text: string, personalize?: ElderPersonalize | null): Promise<string> {
   // personalize is write-through cached to disk per elder: if this call
   // carries it, persist it for future calls; if it didn't, fall back to
   // whatever was last cached rather than losing family/hobby context.
-  if (context.personalize) {
-    savePersonalize(id, context.personalize);
+  if (personalize) {
+    savePersonalize(id, personalize);
   } else {
-    context = { ...context, personalize: loadPersonalize(id) };
+    personalize = loadPersonalize(id);
   }
 
   // The system prompt is rebuilt every turn (not stored) so it always carries the
-  // current persona context and the latest long-term notes about this elder.
+  // elder's registered soul and the latest long-term notes about them.
+  const soul = memory.getSoul(id);
   const { summary } = memory.getRemembrance(id);
-  const system = summary
-    ? `${buildSystemPrompt(context)}\n\nWhat you remember about this elder from earlier conversations:\n${summary}`
-    : buildSystemPrompt(context);
+  let system = buildSystemPrompt(soul, personalize);
+
+  const meds = memory.listMedications(id);
+  if (meds.length > 0) {
+    const lines = meds.map(
+      (m) => `- ${m.name}${m.dose ? ` (${m.dose})` : ""} — ${m.schedule}${m.notes ? ` [${m.notes}]` : ""}`
+    );
+    system += `\n\nTheir medication schedule (weave gentle check-ins around these times into normal conversation; when they confirm or miss a dose, log it with log_medication_confirmation; never push or scold):\n${lines.join("\n")}`;
+  }
+
+  if (summary) {
+    system += `\n\nWhat you remember about this elder from earlier conversations:\n${summary}`;
+  }
 
   const history: ChatMessage[] = [
     { role: "system", content: system },

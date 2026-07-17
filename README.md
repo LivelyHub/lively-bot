@@ -1,6 +1,6 @@
 # lively-bot
 
-> AI companion service for Lively: Mbak Asih and Mas Budi. Pure AI layer — no platform integration lives here. `lively-backend` owns the WhatsApp webhook, message pacing, and delivery; this repo takes already-processed elder chat in and returns a companion reply.
+> AI companion service for Lively: a per-elder companion soul, shaped to each elder's culture and texting style. Pure AI layer — no platform integration lives here. `lively-backend` owns the WhatsApp webhook, message pacing, and delivery; this repo takes already-processed elder chat in and returns a companion reply.
 
 **Status:** 🟡 Implemented, pre-demo. See [SPEC.md](SPEC.md), [PLAN.md](PLAN.md), and shared core [CORE.md](CORE.md).
 
@@ -20,8 +20,8 @@ lively-backend  --POST /reply-->  lively-bot  --tool calls-->  lively-backend
   webhook, pacing)                 OpenAI, memory)               consent, logs, alerts)
 ```
 
-1. Backend receives the WhatsApp message, checks consent, and calls `POST /reply` on this service with `{ elderId, text }`, authenticated with `Authorization: Bearer $BOT_SERVICE_KEY`.
-2. `src/server.ts` routes the request to `src/companion.ts`, which loads that elder's chat history (`src/memory/store.ts`, file-backed), builds the system prompt for the assigned persona (`src/soul/`), and calls OpenAI.
+1. At elder registration, backend calls `POST /soul` **once** with `{ elderId, soul }` — the elder's companion profile (companion name, honorific, language, culture, texting style, interests, health flags, timezone). It persists in SQLite; there is no per-message persona payload.
+2. For each message, backend checks consent and calls `POST /reply` with `{ elderId, text }`, authenticated with `Authorization: Bearer $BOT_SERVICE_KEY`. `src/server.ts` routes to `src/companion.ts`, which loads the elder's soul + long-term remembrance + recent history (`src/memory/`, SQLite), builds a system prompt shaped to that one elder (`src/soul/`), and calls OpenAI.
 3. The model may call tools (`src/tools/`) — exercise logs, Chair Stand results, alerts — which call back into `lively-backend` using the same `BOT_SERVICE_KEY`.
 4. The final answer text is returned as `{ reply }`. Backend owns splitting, pacing, typing indicators, and actually sending it to WhatsApp.
 

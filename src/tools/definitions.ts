@@ -1,5 +1,8 @@
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import { backendRequest } from "./backend.js";
+import { createMemoryStore } from "../memory/store.js";
+
+const memory = createMemoryStore();
 
 export interface ToolContext {
   elderId: string;
@@ -65,6 +68,56 @@ export const TOOLS: ToolDefinition[] = [
     },
     handler: async (args, ctx) =>
       backendRequest("/assessments/chair-test", "POST", { elderId: ctx.elderId, reps: args.reps, source: "chat" }),
+  },
+  {
+    schema: {
+      type: "function",
+      function: {
+        name: "add_medication",
+        description:
+          "Record a medication and its schedule that the elder (or their family) mentioned in chat, so you can gently ask about doses at the right times. Use only for schedules they tell you — never invent or prescribe one.",
+        parameters: {
+          type: "object",
+          properties: {
+            name: { type: "string", description: "Medication name as the elder calls it." },
+            dose: { type: "string", description: "Dose if mentioned, e.g. '1 tablet 5mg'." },
+            schedule: { type: "string", description: "When they take it, in their own words, e.g. 'pagi jam 7 dan malam setelah makan'." },
+            notes: { type: "string", description: "Anything else relevant, e.g. 'from Dr. Sari, for blood pressure'." },
+          },
+          required: ["name", "schedule"],
+        },
+      },
+    },
+    handler: async (args, ctx) => {
+      const id = memory.addMedication(ctx.elderId, {
+        name: args.name,
+        dose: args.dose,
+        schedule: args.schedule,
+        notes: args.notes,
+      });
+      return { ok: true, medicationId: id };
+    },
+  },
+  {
+    schema: {
+      type: "function",
+      function: {
+        name: "stop_medication",
+        description:
+          "Mark a tracked medication as no longer taken, when the elder says they stopped it or the doctor changed it. To change a schedule, stop the old entry and add the new one.",
+        parameters: {
+          type: "object",
+          properties: {
+            name: { type: "string", description: "Name of the medication to stop tracking." },
+          },
+          required: ["name"],
+        },
+      },
+    },
+    handler: async (args, ctx) => {
+      const stopped = memory.stopMedication(ctx.elderId, args.name);
+      return stopped > 0 ? { ok: true } : { ok: false, error: "no active medication with that name" };
+    },
   },
   {
     schema: {

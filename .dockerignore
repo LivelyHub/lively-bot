@@ -1,0 +1,12 @@
+node_modules
+dist
+data
+.env
+.env.*
+*.log
+.git
+.gitea
+.idea
+.vscode
+docs
+*.md
