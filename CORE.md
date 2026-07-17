@@ -56,7 +56,7 @@ titipan_messages   (id, elder_id, household_account_id, body, status['queued'|'d
 | `POST /elders/:id/consent/request` | mobile | request Lively product consent after platform messaging permission exists |
 | `POST /bot/consent` | bot | record elder opt-in, withdrawal, or pause from WhatsApp |
 | `GET /elders/:id/conversation` | mobile | read chat monitor only after elder opt-in |
-| `POST /bot/inbound` | bot | log inbound WhatsApp text and fetch context if consent allows |
+| `POST /bot/inbound` | bot | log inbound WhatsApp text and fetch context if consent allows (backend passes this as `context` in its call to `lively-bot`'s `POST /reply`) |
 | `POST /bot/outbound` | bot | log outbound WhatsApp text after send |
 | `GET /elders/:id/progress` | mobile | read exercise history and Chair Stand history |
 | `POST /assessments/chair-test` | bot | record parsed 30-second Chair Stand repetitions |

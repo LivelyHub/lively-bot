@@ -20,8 +20,8 @@
 ## 3. Concept
 
 - `lively-backend` owns the WhatsApp Cloud API webhook, platform messaging permission, product consent gate, and Human Texting Engine (splitting/pacing/typing indicator/sending). None of that lives in this repo.
-- Backend calls `POST /reply` on this service only after consent allows AI conversation, passing `{ elderId, text }` already extracted from the inbound WhatsApp payload.
-- This repo loads per-elder conversation history, builds a system prompt from the assigned persona (Mbak Asih or Mas Budi) plus honorific/health flags/timezone, and asks OpenAI for a reply.
+- Backend calls `POST /reply` on this service only after consent allows AI conversation, passing `{ elderId, text, context }` where `context` is `{ companion, honorific, healthFlags, timezone, elderName? }` read from the `elders` row backend already has in hand for that webhook. If `context` is omitted, this repo falls back to a default persona/context rather than failing the call.
+- This repo loads per-elder conversation history, builds a system prompt from the assigned persona (Mbak Asih or Mas Budi) plus honorific/health flags/timezone from `context`, and asks OpenAI for a reply. `context` is only applied when starting a fresh conversation thread for that elder; it does not retroactively change an in-flight thread's persona.
 - The model can call tools mid-reply to log exercise completion, record Chair Stand repetitions, or raise an alert — each tool call is a request back to `lively-backend` using `BOT_SERVICE_KEY`.
 - The HTTP response is plain reply text. Backend decides how to split, pace, and deliver it to WhatsApp.
 - Alternative considered: bot owns the WhatsApp socket directly (previous architecture, Baileys-based). Rejected — WhatsApp connection lifecycle, webhook verification, and delivery pacing are now backend's responsibility, keeping this repo a stateless-per-call AI service plus per-elder conversation memory.
@@ -29,7 +29,7 @@
 ## 4. MVP features (YAGNI-tight)
 
 **In scope:**
-- `POST /reply` HTTP endpoint, authenticated with `BOT_SERVICE_KEY`, taking `{ elderId, text }` and returning `{ reply }`.
+- `POST /reply` HTTP endpoint, authenticated with `BOT_SERVICE_KEY`, taking `{ elderId, text, context }` and returning `{ reply }`.
 - Two companion personas with fixed prompts and per-elder context (honorific, health flags, timezone).
 - File-backed per-elder conversation memory (`src/memory/store.ts`), trimmed to a bounded window.
 - Tool calls into `lively-backend` for exercise-log completion, Chair Stand repetition parsing, and event-based alert creation, using `BOT_SERVICE_KEY`.
@@ -42,7 +42,7 @@ Node/TypeScript service, no framework — `node:http` server with a single route
 
 ```
 Elder WhatsApp <-> Meta WhatsApp Cloud API <-> lively-backend
-                                                     |  POST /reply {elderId, text}
+                                                     |  POST /reply {elderId, text, context}
                                                      v
                                                 lively-bot (this repo)
                                                      |

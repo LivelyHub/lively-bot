@@ -29,7 +29,8 @@
 - Removed `src/texting.ts` (splitting/pacing) — that responsibility moves to backend's Human Texting Engine.
 - Added `src/server.ts`: minimal `node:http` server exposing `POST /reply`, authenticated with `BOT_SERVICE_KEY`, wired to the existing `companion.ts` reply loop.
 - Updated `src/config.ts`/`src/index.ts` to boot the HTTP server instead of platform clients; added `node:test` coverage for the new route.
-- Remaining: confirm the exact request/response contract with `lively-backend` (field names, error shape, timeout expectations) and update `CORE.md`'s bot-facing sections if the contract differs from `POST /reply {elderId, text} -> {reply}`.
+- Fixed: `/reply` now accepts `{ elderId, text, context }` — `context` (companion, honorific, healthFlags, timezone) was previously never wired through from backend, so every elder silently got the default persona/honorific. Optional, defaults preserved if backend omits it.
+- Remaining: confirm error shape and timeout expectations with `lively-backend`.
 
 **Day 3 - 2026-07-18 - integration, polish, demo rehearsal, submit**
 

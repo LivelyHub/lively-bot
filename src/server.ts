@@ -2,10 +2,12 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { reply } from "./companion.js";
 import { env } from "./config.js";
 import { logger } from "./logger.js";
+import type { ElderContext } from "./soul/prompt.js";
 
 interface ReplyRequest {
   elderId: string;
   text: string;
+  context?: ElderContext;
 }
 
 function readBody(req: IncomingMessage): Promise<string> {
@@ -48,7 +50,7 @@ export function createBotServer() {
     }
 
     try {
-      const answer = await reply(payload.elderId, payload.text);
+      const answer = await reply(payload.elderId, payload.text, payload.context);
       send(res, 200, { reply: answer });
     } catch (err) {
       logger.error({ err, elderId: payload.elderId }, "Failed to generate reply");
