@@ -23,7 +23,7 @@ jobs:
       - name: Write runtime env file
         run: |
           umask 077
-          printf '%s\n' "${{ secrets.BOT_ENV_FILE }}" > .env.deploy
+          printf '%s\n' "${{ secrets.BOT_ENV_FILE }}" | tr -d '\r' > .env.deploy
 
       - name: Replace container
         run: |
